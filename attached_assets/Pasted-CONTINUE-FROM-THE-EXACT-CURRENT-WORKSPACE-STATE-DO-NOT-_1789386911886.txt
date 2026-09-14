@@ -1,0 +1,217 @@
+CONTINUE FROM THE EXACT CURRENT WORKSPACE STATE.
+
+DO NOT RE-AUDIT THE PROJECT.
+DO NOT REREAD THE WHOLE REPOSITORY.
+DO NOT RUN ANOTHER FULL SOURCE SCAN UNLESS ABSOLUTELY REQUIRED.
+DO NOT ADD FEATURES.
+
+The previous session already completed:
+
+- Discord lifecycle failure logging
+- README corrections
+- project checkpoint documentation
+- live Discord gateway verification
+- scheduler verification
+- full scan verification
+- 26/26 configured ATS sources working
+- database connected
+- automatic interval confirmed at 900 seconds
+- next automatic deadline preserved
+- web job UI remains disabled
+- uploaded instruction file intentionally excluded
+
+The previous session stopped ONLY because the Replit daily quota ended while preparing final Git staging/commit.
+
+FIRST — inspect ONLY Git state using lightweight commands:
+
+git status --short
+git diff --cached --stat
+git diff --stat
+git log -1 --oneline
+
+Do not modify anything yet.
+
+==================================================
+CHECKPOINT FILE
+==================================================
+
+Check where PROJECT_CHECKPOINT.md currently exists.
+
+Preferred final location:
+
+docs/PROJECT_CHECKPOINT.md
+
+If it is already there, leave it.
+
+If it exists only as:
+PROJECT_CHECKPOINT.md
+
+move it to:
+docs/PROJECT_CHECKPOINT.md
+
+ONLY if doing so does not conflict with existing documentation.
+
+README should reference the correct checkpoint path so future Cursor/Codex/Replit sessions can find it quickly.
+
+Do NOT maintain duplicate checkpoint files.
+
+==================================================
+DISCORD INTERACTION TIMEOUT
+==================================================
+
+Before final commit, confirm whether the actual
+"AFTER HOURS JOB HUNTER didn't respond in time"
+regression was fixed.
+
+Do NOT perform another full scan just to test this.
+
+Verify the interaction acknowledgement architecture for:
+
+- SCAN NOW
+- SEARCH JOBS
+- STATUS
+- LATEST JOBS
+- HELP
+- SAVE
+- SKIP
+- APPLY NOW
+
+Potentially slow interactions must ACK/defer immediately before any slow work.
+
+If previous session already implemented and verified this, do not rewrite it.
+
+If real user-side interaction verification is still NOT completed, clearly mark it as the only remaining runtime verification instead of claiming PASS.
+
+==================================================
+BRIGHT DATA STATUS
+==================================================
+
+The previous Replit runtime reported:
+
+LinkedIn: DISABLED
+JobStreet: DISABLED
+
+Do NOT "fix" this by inventing IDs or credentials.
+
+Determine only whether this is because the relevant Replit environment variables/secrets are absent.
+
+If code support exists but secrets are missing, document:
+
+LinkedIn: DISABLED IN REPLIT ENVIRONMENT
+JobStreet: DISABLED IN REPLIT ENVIRONMENT
+
+This is not a code failure.
+
+Never print secret values.
+
+==================================================
+FINAL LIGHTWEIGHT CHECKS
+==================================================
+
+Do NOT rerun the expensive full source scan.
+
+Run only:
+
+pytest -q
+python -m compileall -q src
+git diff --check
+
+Confirm no secret/private files are staged.
+
+Do NOT commit:
+- pasted instruction files
+- .env
+- resume/private documents
+- tokens
+- generated private files
+
+==================================================
+COMMIT
+==================================================
+
+If the intended changes are uncommitted, commit ONLY:
+
+- Discord lifecycle/logging fix
+- README.md
+- docs/PROJECT_CHECKPOINT.md
+- any directly related tests already created
+
+Use:
+
+Finalize Discord workflow and project handoff
+
+Do not create another commit if those exact changes are already committed.
+
+==================================================
+PUSH
+==================================================
+
+Push to:
+
+https://github.com/draiimon/job-scraper
+branch: main
+
+GitHub identity:
+draiimon
+
+If push succeeds:
+verify origin/main contains the commit.
+
+If authentication fails:
+STOP after one attempt.
+Do not repeatedly consume actions.
+
+==================================================
+FINAL RESPONSE ONLY
+==================================================
+
+GIT STATUS BEFORE:
+[clean/staged/modified]
+
+DISCORD TIMEOUT FIX:
+PASS / NEEDS REAL USER TEST / FAIL
+
+DISCORD BOT:
+PASS/FAIL
+
+SCHEDULER:
+PASS/FAIL
+
+AUTO INTERVAL:
+900 seconds / other
+
+SOURCES:
+26/26 / actual result
+
+LINKEDIN:
+READY / DISABLED IN REPLIT ENVIRONMENT / FAIL
+
+JOBSTREET:
+READY / DISABLED IN REPLIT ENVIRONMENT
+
+README:
+UPDATED
+
+PROJECT CHECKPOINT:
+[path]
+
+TESTS:
+X passed / X failed
+
+SECURITY CHECK:
+PASS/FAIL
+
+COMMIT:
+[hash]
+
+PUSH:
+PASS/BLOCKED
+
+REMOTE:
+draiimon/job-scraper main
+
+WORKING TREE AFTER:
+CLEAN/NOT CLEAN
+
+REMAINING BLOCKER:
+[only actual blocker or NONE]

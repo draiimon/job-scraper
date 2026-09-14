@@ -1,0 +1,428 @@
+FINAL REPOSITORY AUDIT — DO NOT REBUILD THE PROJECT.
+
+Repository:
+https://github.com/draiimon/job-scraper
+Branch: main
+Owner: draiimon
+
+Inspect the ACTUAL CURRENT CODE first because several recent edits may have introduced regressions.
+
+The intended final architecture is:
+
+Discord Bot = PRIMARY UI
+Discord webhook = emergency fallback ONLY
+Supabase PostgreSQL = persistent state
+Render = intended production host
+Replit = development/testing workspace
+Automatic polling = every 15 minutes
+
+AUDIT AND FIX THE FOLLOWING:
+
+1. AUTOMATIC SCHEDULER
+- Must start automatically.
+- Immediate controlled startup scan.
+- Then every 900 seconds / 15 minutes.
+- v!scan is only an extra manual scan.
+- Manual scans must NOT replace/reset automatic scheduling.
+- One global scan at a time.
+- No overlapping scans.
+- last_poll_at and next_poll_at must update for REAL.
+- Restart/deploy must preserve deduplication.
+
+2. SOURCE CONFIG
+- SOURCE_TARGETS_JSON overrides when non-empty.
+- Otherwise ALWAYS load config/job_sources.json.
+- Validate every configured source.
+- Never silently load zero sources because of a config/parser bug.
+- Report actual working/failed source count.
+
+3. ATS SOURCES
+- Keep verified Greenhouse / Lever / Ashby sources.
+- Process independent sources concurrently.
+- Safe concurrency.
+- Per-source timeout.
+- One failed source must not fail the scan.
+
+4. LINKEDIN
+- Bright Data trigger → snapshot flow.
+- Recent/reposted jobs only.
+- Philippines / Remote PH.
+- Free quota protection.
+- Non-blocking.
+- Cache repeated searches.
+
+5. JOBSTREET
+- Use Bright Data only when BRIGHTDATA_JOBSTREET_DATASET_ID is legitimately configured.
+- If missing: show DISABLED.
+- Never invent an ID.
+
+6. JOB FRESHNESS
+0–24h highest priority
+1–3d high
+4–7d normal
+8–14d lower
+15–30d only exceptional matches
+30+d normally skip
+
+Newly discovered != newly posted.
+
+Handle legitimate reposts using source timestamps/job IDs.
+
+7. ROLE FILTER
+Highest priority:
+DevOps / Cloud / Infrastructure / Systems / Linux / Platform / SRE.
+
+Also allow legitimate entry-level:
+IT Support / Technical Support / Service Desk / NOC / Networking / Software / QA / Cybersecurity / SOC / Application Support / IT Operations.
+
+Reject unrelated:
+Accounting / Finance / HR / Sales / Marketing / Admin / generic VA / nontechnical customer service.
+
+A technology keyword inside an unrelated job must NOT make it a tech job.
+
+8. SENIORITY
+Strongly penalize/suppress:
+Senior / Lead / Staff / Principal / Architect / Manager / 4+ or 5+ required years.
+
+Senior-level warnings must make 100% match impossible.
+
+9. DISCORD BOT PRIMARY
+If DISCORD_BOT_TOKEN is available and bot is healthy:
+ALL primary Discord functionality must use the BOT.
+
+Webhook is fallback only.
+
+Never duplicate Bot + Webhook notifications.
+
+10. DISCORD-NATIVE ONLY
+NO active /search web UI.
+NO active /status web UI.
+NO internal browser redirects for controls.
+
+These happen INSIDE Discord:
+SEARCH
+SCAN NOW
+STATUS
+LATEST
+SAVE
+SKIP
+APPLY
+COVER LETTER REVIEW
+
+Only VIEW JOB / actual employer application portal may open externally.
+
+11. BOT COMMANDS
+v!search <role>
+v!latest
+v!status
+v!scan
+v!help
+
+Verify Message Content Intent and required permissions.
+
+12. CONTROL PANEL
+One persistent polished dark/orange bot-authored embed.
+
+Buttons:
+SCAN NOW
+SEARCH JOBS
+LATEST JOBS
+STATUS
+HELP
+
+Persist message ID so redeploy edits the existing panel rather than creating duplicates.
+
+Footer:
+After Hours Job Hunter • Made by masoncalix
+
+13. SEARCH JOBS
+Discord modal / bot interaction, NOT web page.
+
+Filters:
+role
+location
+freshness
+work setup
+minimum score
+entry-level preference
+result limit
+
+Results return inside Discord.
+
+v!search should be targeted and fast:
+database/cache first
+then LinkedIn Bright Data / relevant sources as needed.
+
+Do NOT full-scan all sources unnecessarily.
+
+14. SCAN NOW
+Immediately ACK:
+SCAN STARTED
+
+Then run asynchronously.
+
+Progress updates:
+sources completed
+jobs checked
+recent PH matches
+
+Finish:
+SCAN COMPLETE
+duration
+sources
+jobs checked
+new matches
+alerts sent
+next automatic scan
+
+5-minute cooldown.
+No overlap.
+
+15. JOB EMBEDS
+Polished dark/orange style.
+Minimal emojis.
+No:
+svg
+(image)
+raw Markdown garbage
+Discord asset URLs
+escaped internal source strings.
+
+Buttons:
+VIEW JOB
+APPLY NOW
+SAVE
+SKIP
+COMPANY only when valid
+
+16. SAVE / SKIP
+Discord interaction only.
+Persist to Supabase.
+Edit job state.
+No browser redirect.
+
+17. APPLY NOW
+Stay inside Discord.
+
+Flow:
+APPLY
+→ load job
+→ load canonical profile/resume
+→ deterministic cover-letter draft
+→ optional Gemini revision
+→ factual validation
+→ Discord application review
+
+18. COVER LETTER
+Do NOT hard-code junior/entry-level assumptions.
+
+Use neutral wording based on actual job title and requirements.
+
+Never invent facts.
+
+Role-aware truthful emphasis.
+
+Cache generated letters.
+
+19. GEMINI
+AI is OPTIONAL.
+
+Do not use AI for normal monitoring.
+
+Support safe rate-limit handling:
+429
+503
+timeouts
+backoff
+jitter
+cooldown
+cache
+circuit breaker
+
+If Gemini fails:
+deterministic template fallback.
+
+Job monitoring must NEVER fail because AI is unavailable.
+
+20. APPLICATION REVIEW
+Inside Discord:
+VIEW COVER LETTER
+VIEW RESUME
+SEND APPLICATION
+CANCEL
+
+SEND requires second confirmation.
+
+APPLICATION_DRY_RUN=true:
+NEVER contact a real employer.
+
+Duplicate applications impossible.
+
+21. GMAIL
+Optional OAuth integration.
+
+If not configured:
+show NEEDS OAUTH and keep everything else working.
+
+Never guess employer emails.
+
+22. DATABASE
+Supabase PostgreSQL must persist:
+jobs
+dedup
+baseline
+source health
+saved/skipped state
+applications
+cover letters
+control-panel message ID
+scheduler state where appropriate.
+
+23. NO WEB JOB-HUNT UI
+Remove/disable any newly created user-facing web job search/dashboard feature from the active workflow.
+
+FastAPI /health and backend API may remain for Render health checks/debugging.
+
+The PRODUCT UI is Discord.
+
+24. SECURITY
+Never expose/commit/log:
+.env
+DATABASE_URL
+DISCORD_BOT_TOKEN
+DISCORD_WEBHOOK_URL
+BRIGHTDATA_API_TOKEN
+Gemini keys
+Google OAuth credentials
+APP_SECRET_KEY
+private resume
+
+Check .gitignore and git tracked files.
+
+25. HOSTING
+Do not make Replit-specific architecture changes.
+
+Keep:
+Docker compatibility
+Render compatibility
+0.0.0.0
+runtime PORT
+external Supabase persistence.
+
+26. GITHUB
+Use ONLY:
+draiimon/job-scraper
+main
+
+Never configure/push as another GitHub user.
+
+27. REAL VERIFICATION
+Do not rely only on unit tests.
+
+Actually verify:
+- sources load
+- one real source scan
+- automatic scheduler
+- next poll
+- Discord bot healthy
+- v!status
+- v!help
+- v!latest
+- v!search
+- v!scan immediate ACK
+- scan background completion
+- Supabase
+- LinkedIn Bright Data
+- Discord embed/buttons
+
+Do NOT send a real employer application.
+
+28. DO NOT REWRITE WORKING CODE
+Fix regressions with the smallest correct changes.
+
+Do not touch the already-fixed neutral cover-letter wording unless broken.
+
+After fixing, run all tests and push only if everything passes.
+
+REPORT ONLY:
+
+REPOSITORY AUDIT:
+PASS/FAIL
+
+SCHEDULER:
+PASS/FAIL
+
+AUTO SCAN INTERVAL:
+[value]
+
+NEXT AUTO SCAN:
+[time]
+
+SOURCE JSON:
+PASS/FAIL
+
+SOURCES:
+[X working / X failed]
+
+LINKEDIN:
+PASS/FAIL
+
+JOBSTREET:
+READY/DISABLED
+
+DISCORD BOT PRIMARY:
+PASS/FAIL
+
+WEBHOOK FALLBACK ONLY:
+PASS/FAIL
+
+CONTROL PANEL:
+PASS/FAIL
+
+v!search:
+PASS/FAIL
+
+v!latest:
+PASS/FAIL
+
+v!status:
+PASS/FAIL
+
+v!scan:
+PASS/FAIL
+
+v!help:
+PASS/FAIL
+
+DISCORD-NATIVE UI:
+PASS/FAIL
+
+WEB JOB UI:
+DISABLED/ACTIVE
+
+COVER LETTER:
+PASS/FAIL
+
+GEMINI FALLBACK:
+PASS/FAIL
+
+DATABASE:
+PASS/FAIL
+
+SECURITY:
+PASS/FAIL
+
+RENDER COMPATIBLE:
+YES/NO
+
+TESTS:
+X passed / X failed
+
+FIXES MADE:
+[short list]
+
+PUSH:
+[commit]
+
+REMAINING BLOCKERS:
+[only real blockers]
