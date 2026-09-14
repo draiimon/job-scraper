@@ -212,6 +212,43 @@ async def test_discord_controls_ack_during_slow_scan(monkeypatch, tmp_path):
         )
         await status_task
 
+        view_all_interaction = FakeInteraction()
+        view_all_task = await assert_acknowledged(
+            button(view, "VIEW ALL JOBS").callback(view_all_interaction),
+            view_all_interaction,
+        )
+        await view_all_task
+        assert view_all_interaction.followup.sent
+        assert view_all_interaction.followup.sent[0]["message"].embeds[0].title == "𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃"
+
+        class FakeTextChannel:
+            def __init__(self):
+                self.sent = []
+
+            async def send(self, content=None, **kwargs):
+                message = FakeMessage(kwargs.get("embed"))
+                self.sent.append({"content": content, "message": message, **kwargs})
+                return message
+
+        class FakeAuthor:
+            bot = False
+
+        class FakeTextMessage:
+            _next_id = 100
+
+            def __init__(self, content, channel):
+                self.id = FakeTextMessage._next_id
+                FakeTextMessage._next_id += 1
+                self.content = content
+                self.author = FakeAuthor()
+                self.channel = channel
+
+        text_channel = FakeTextChannel()
+        await client.on_message(FakeTextMessage("v!viewall", text_channel))
+        await client.on_message(FakeTextMessage("v!view all", text_channel))
+        assert len(text_channel.sent) == 2
+        assert all(item["message"].embeds[0].title == "𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃" for item in text_channel.sent)
+
         original_sessions = repo.sessions
 
         def slow_sessions():

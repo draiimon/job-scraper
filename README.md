@@ -14,7 +14,7 @@ After Hours Job Hunter is a Discord-first Philippine technology job monitor and 
 - Deterministic local scoring and filtering; Gemini is optional and never required for monitoring
 - Docker and Render deployment support
 
-The default polling interval is 15 minutes. Startup performs one controlled scan, then the scheduler runs every 900 seconds. A source failure or Discord outage is isolated from the rest of the scan, and stored jobs can be retried for delivery.
+The default polling interval is 15 minutes. Startup performs one controlled scan, then the scheduler runs every 900 seconds. A source failure or Discord outage is isolated from the rest of the scan, and stored jobs can be retried for delivery. Scan counters distinguish raw jobs, 0–90 day jobs, computer-related jobs, entry-level-compatible jobs, and qualifying alerts.
 
 ## Discord
 
@@ -30,7 +30,7 @@ v!resume
 v!help
 ```
 
-The persistent control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW ALL JOBS`, `VIEW STATUS`, `HELP`, and `UPLOAD RESUME` when signed links are configured. `v!viewall` provides a compact, paginated Discord job board. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`.
+The persistent control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW ALL JOBS`, `VIEW STATUS`, `HELP`, and `UPLOAD RESUME` when signed links are configured. `v!viewall` and `v!view all` provide the same compact, paginated Discord job board, using stored results only. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`.
 
 `APPLY NOW` opens an internal review flow. It can prepare a truthful cover letter and show the configured resume before an explicit send confirmation. Live sending is not implemented; dry-run mode is enabled by default. Only `VIEW JOB` and the employer's application URL open external pages.
 
@@ -100,7 +100,7 @@ The service does not bypass bot protections or scrape unsupported commercial boa
 
 ## Filtering and freshness
 
-The scanner keeps recent active Philippine or Remote PH technology roles, rejects unrelated Accounting, Finance, HR, Recruiting, Sales, Marketing, Admin, generic VA, and nontechnical customer-service listings, and strongly penalizes senior, lead, staff, principal, architect, manager, and multi-year roles for this profile. A job discovered today is not automatically a job posted today. Reposts require source evidence such as a new timestamp or job ID.
+The scanner keeps recent active Philippine or Remote PH technology roles, rejects unrelated Accounting, Finance, HR, Recruiting, Sales, Marketing, Admin, generic VA, and nontechnical customer-service listings, and strongly penalizes senior, lead, staff, principal, architect, manager, and multi-year roles for this profile. Freshness is ranked as 0–1 day highest, 2–7 very high, 8–14 high, 15–30 normal, 31–60 lower, and 61–90 eligible. A job discovered today is not automatically a job posted today. Reposts require source evidence such as a new timestamp or job ID.
 
 ## Optional Bright Data and AI features
 
@@ -112,7 +112,8 @@ The preferred production flow is Discord-first:
 
 ```text
 v!jobstreet → CONNECT JOBSTREET → private short-lived setup link
-→ Browserless interactive browser → manual Google/JobStreet sign-in
+→ Browserless interactive browser → WAITING FOR USER LOGIN
+→ manual Google/JobStreet sign-in
 → session verification → encrypted database session → READY
 ```
 
@@ -127,8 +128,9 @@ Browserless and JobStreet runtime configuration is initialized in the database
 table `app_settings`. The safe Browserless Cloud endpoint is created on first
 startup and can be overridden there; `jobstreet_enabled`, the JobStreet base
 URL, search terms, limits, and timeout values are also non-secret database
-settings. `BROWSERLESS_API_TOKEN` is a bootstrap secret only: on Supabase it is
-migrated to Vault and subsequent starts prefer the Vault value. The token,
+settings. `BROWSERLESS_API_TOKEN` is the current deployment credential; a
+Vault value is only a fallback when the deployment secret is absent, so a stale
+Vault value cannot override a rotated credential. The token,
 Google credentials, cookies, storage state, and encryption material are never
 written to normal configuration rows or logs.
 

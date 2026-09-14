@@ -265,9 +265,10 @@ async def _run_interactive_session(cfg: Settings, repo, session: InteractiveSess
             session.live_url = str(response.get("liveURL") or "")
             if not session.live_url:
                 raise RuntimeError("Browserless did not return a live URL.")
-            session.status = "WAITING_FOR_USER"
+            session.status = "WAITING FOR USER LOGIN"
             session.ready.set()
             _safe_request_status(repo, session.nonce, "RUNNING")
+            _safe_mark_status(repo, session.discord_user_id, "WAITING FOR USER LOGIN")
 
             stage = "wait_for_user_login"
             deadline = asyncio.get_running_loop().time() + cfg.jobstreet_auth_timeout_seconds

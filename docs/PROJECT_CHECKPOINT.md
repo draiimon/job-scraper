@@ -24,7 +24,7 @@ Commands:
 
 - `v!search <role>` — targeted recent search, with immediate acknowledgement, typing/progress updates, query expansion, cache, cooldown, and no duplicate response. If no exact match is found, it offers up to three clearly labeled recent stored alternatives without starting a second scan.
 - `v!latest` — newest qualifying stored matches.
-- `v!viewall` — compact paginated Discord job board. It reads five stored rows at a time and never starts a source scan when changing pages.
+- `v!viewall` and `v!view all` — the same compact paginated Discord job board. It reads five stored rows at a time and never starts a source scan when changing pages.
 - `v!status` — scheduler, source, database, Discord, LinkedIn, JobStreet, and AI health.
 - `v!scan` — one protected immediate background scan.
 - `v!resume` — private resume-management flow.
@@ -110,10 +110,12 @@ Render needs an external PostgreSQL/Supabase `DATABASE_URL`, bot token, control 
 
 ## Latest verified state
 
-- Tests: 75 passed (one third-party Python 3.12 `audioop` deprecation warning)
-- Live startup scan: 27 sources loaded, 27 attempted, 26 successful, 5,089 raw/normalized jobs, 4,306 within 0–90 days, 240 computer-related, 164 entry-compatible, and 865 duplicates removed.
-- Live signed JobStreet handoff: Browserless CDP connected, JobStreet OAuth login navigation was started, the response contained the live-browser redirect, and the session stopped at `WAITING_FOR_USER` pending manual Google/2FA/CAPTCHA completion.
-- Live targeted searches: software engineer returned 2 qualifying stored/live results; developer returned 3. Both reported real source, review, freshness, relevance, entry-level, and qualifying counters with no Bright Data errors.
+- Tests: 76 passed (one third-party Python 3.12 `audioop` deprecation warning)
+- Live startup scan: 27 sources loaded, 27 attempted, 27 successful, 5,101 raw/normalized jobs, 4,318 within 0–90 days, 242 computer-related, 165 entry-compatible, and 865 duplicates removed.
+- Live database compatibility: `app_state.value` is `TEXT` in the deployment database; scheduler counters persisted and read back after restart without data loss. The SQLite legacy-schema migration is idempotent and preserves payloads over 500 characters.
+- Live signed JobStreet handoff: the current deployment credential authenticated Browserless, CDP connected, JobStreet loaded, a usable live-browser URL was produced, and the session stopped at `WAITING FOR USER LOGIN` pending manual Google/2FA/CAPTCHA completion. A stale Vault value did not override the deployment credential.
+- Live targeted searches: software engineer returned 2 qualifying results, developer 2, DevOps 1, and IT Support 5. Query relevance was counted before profile scoring; software-family titles were returned before infrastructure-only suggestions. A LinkedIn failure was isolated and reported without blocking ATS results.
+- Live stored job board: `v!viewall` and `v!view all` both use the stored paginated board; the deployment database contained 26 active 0–90 day stored matches during verification.
 - Final release commit: current `main` HEAD (see `git log -1 --oneline`)
 - Included finalization: Discord-first controls, database/Vault-backed
   JobStreet linking, visual gallery, date-sorted job table/export/timeline,

@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import httpx
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings
@@ -46,6 +46,28 @@ class Repository:
         if self.engine.dialect.name == 'postgresql':
             with self.engine.begin() as connection:
                 connection.execute(text('ALTER TABLE app_state ALTER COLUMN value TYPE TEXT'))
+        elif self.engine.dialect.name == 'sqlite':
+            columns = inspect(self.engine).get_columns('app_state')
+            value_column = next((column for column in columns if column['name'] == 'value'), None)
+            if value_column is not None and getattr(value_column['type'], 'length', None) == 500:
+                # SQLite has no ALTER COLUMN. Rebuild only this small key/value
+                # table and copy every existing row before dropping the legacy
+                # table, so local deployments receive the same widening as
+                # PostgreSQL without losing scheduler state.
+                with self.engine.begin() as connection:
+                    connection.exec_driver_sql('ALTER TABLE app_state RENAME TO app_state_legacy')
+                    connection.exec_driver_sql(
+                        'CREATE TABLE app_state ('
+                        '"key" VARCHAR(100) NOT NULL, '
+                        'value TEXT NOT NULL, '
+                        'PRIMARY KEY ("key")'
+                        ')'
+                    )
+                    connection.exec_driver_sql(
+                        'INSERT INTO app_state ("key", value) '
+                        'SELECT "key", value FROM app_state_legacy'
+                    )
+                    connection.exec_driver_sql('DROP TABLE app_state_legacy')
     def initialize_runtime_config(self, cfg: Settings) -> dict[str, str]:
         """Create/load safe runtime settings and hydrate the process config.
 

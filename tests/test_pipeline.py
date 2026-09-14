@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import pytest
+from sqlalchemy import inspect, text
 from src.config import Settings
 from src.jobs import NormalizedJob, evaluate, is_ph_location, freshness
 from src.services import Pipeline, Repository
@@ -24,6 +25,31 @@ from src.discord_bot import discord_timestamp
 def job(**overrides):
     values=dict(source='test',source_job_id='one',title='Junior DevOps Engineer',company='Cloud PH',location='Taguig, Philippines — Hybrid',description='Fresh graduate AWS Docker Terraform Linux CI/CD Kubernetes.',url='https://example.com/one',date_posted=datetime.now(timezone.utc)-timedelta(hours=2))
     values.update(overrides); return NormalizedJob(**values)
+
+def test_legacy_sqlite_app_state_is_widened_without_losing_payload(tmp_path):
+    database = tmp_path / 'legacy-state.db'
+    repo = Repository(f'sqlite:///{database}')
+    with repo.engine.begin() as connection:
+        connection.exec_driver_sql(
+            'CREATE TABLE app_state ('
+            '"key" VARCHAR(100) NOT NULL, '
+            'value VARCHAR(500) NOT NULL, '
+            'PRIMARY KEY ("key")'
+            ')'
+        )
+        connection.execute(
+            text('INSERT INTO app_state ("key", value) VALUES (:key, :value)'),
+            {'key': 'scheduler', 'value': '{"jobs_0_90":"' + ('1' * 620) + '"}'},
+        )
+
+    repo.create_schema()
+    value_column = next(
+        column for column in inspect(repo.engine).get_columns('app_state')
+        if column['name'] == 'value'
+    )
+    assert str(value_column['type']) == 'TEXT'
+    assert len(repo.state('scheduler')['jobs_0_90']) == 620
+    repo.create_schema()
 
 def test_scoring_and_seniority():
     score,reasons,warnings,valid=evaluate(job())

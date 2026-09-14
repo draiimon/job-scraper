@@ -373,7 +373,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             **send_options,
         )
         try:
-            jobs,total=await load_view_all_jobs(page, days, min_score)
+            jobs,total=await load_view_all_jobs(page=page, days=days, min_score=min_score)
             embed,pages=view_all_embed(jobs,page,total)
             await loading.edit(embed=embed,view=ViewAllJobsView(jobs,page,pages))
         except Exception as exc:
@@ -504,17 +504,20 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await send_jobstreet_link(interaction,interaction.user.id)
         @discord.ui.button(label='CHECK CONNECTION',style=discord.ButtonStyle.secondary,custom_id='jobhunter:jobstreet-check')
         async def check(self,interaction,button):
-            await interaction.response.send_message(embed=jobstreet_status_embed(interaction.user.id),view=JobStreetView(),ephemeral=True)
+            await interaction.response.defer(ephemeral=True,thinking=True)
+            embed=await asyncio.to_thread(jobstreet_status_embed,interaction.user.id)
+            await interaction.followup.send(embed=embed,view=JobStreetView(),ephemeral=True)
         @discord.ui.button(label='REAUTHENTICATE',style=discord.ButtonStyle.secondary,custom_id='jobhunter:jobstreet-reauth')
         async def reauthenticate(self,interaction,button):
             await send_jobstreet_link(interaction,interaction.user.id)
         @discord.ui.button(label='DISCONNECT',style=discord.ButtonStyle.danger,custom_id='jobhunter:jobstreet-disconnect')
         async def disconnect_source(self,interaction,button):
             from .jobstreet_link import cancel_interactive_sessions, disconnect
+            await interaction.response.defer(ephemeral=True,thinking=True)
             removed=await asyncio.to_thread(disconnect,repo,interaction.user.id)
             cancel_interactive_sessions(interaction.user.id)
             message='The encrypted JobStreet session was removed.' if removed else 'No saved JobStreet session was found.'
-            await interaction.response.send_message(embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐃𝐈𝐒𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐄𝐃',message),ephemeral=True)
+            await interaction.followup.send(embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐃𝐈𝐒𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐄𝐃',message),ephemeral=True)
     class SearchModal(discord.ui.Modal,title='Find recent jobs'):
         role=discord.ui.TextInput(label='Job role / keyword',placeholder='Junior DevOps',max_length=100)
         location=discord.ui.TextInput(label='Location',default='Philippines',required=False,max_length=100)
@@ -546,11 +549,9 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.followup.send(embed=await panel_embed(),ephemeral=True)
         @discord.ui.button(label='JOBSTREET',style=discord.ButtonStyle.secondary,custom_id='jobhunter:jobstreet')
         async def jobstreet(self,interaction,button):
-            await interaction.response.send_message(
-                embed=jobstreet_status_embed(interaction.user.id),
-                view=JobStreetView(),
-                ephemeral=True,
-            )
+            await interaction.response.defer(ephemeral=True,thinking=True)
+            embed=await asyncio.to_thread(jobstreet_status_embed,interaction.user.id)
+            await interaction.followup.send(embed=embed,view=JobStreetView(),ephemeral=True)
         @discord.ui.button(label='VIEW LATEST JOBS',style=discord.ButtonStyle.secondary,custom_id='jobhunter:latest')
         async def latest(self,interaction,button):
             from sqlalchemy import select
