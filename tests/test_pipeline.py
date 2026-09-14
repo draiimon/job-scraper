@@ -47,7 +47,7 @@ def test_broad_technology_role_is_eligible_but_senior_is_not():
 @pytest.mark.asyncio
 async def test_pipeline_deduplicates_and_persists(tmp_path):
     repo=Repository(f'sqlite:///{tmp_path}/agent.db'); repo.create_schema()
-    pipe=Pipeline(repo,Settings(database_url=f'sqlite:///{tmp_path}/agent.db',polling_enabled=False,discord_webhook_url=None))
+    pipe=Pipeline(repo,Settings(database_url=f'sqlite:///{tmp_path}/agent.db',polling_enabled=False,discord_webhook_url=None,discord_bot_token=None))
     first,accepted=await pipe.process(job())
     second,_=await pipe.process(job())
     assert accepted and first and first.score >= 85
@@ -74,7 +74,6 @@ def test_discord_alert_is_compact_and_has_real_link_buttons():
     assert '✅' not in payload['embeds'][0]['fields'][0]['value']
     assert payload['components'][0]['components'][0]['url'] == record.url
     assert any(x['label']=='APPLY NOW' and x['url'].startswith('https://agent.example/actions/') for x in payload['components'][0]['components'])
-    assert any(x['label']=='SEARCH JOBS' and x['url']=='https://agent.example/search' for x in payload['components'][1]['components'])
     assert sum(x['name']=='𝐖𝐀𝐍𝐓 𝐓𝐎 𝐅𝐈𝐍𝐃 𝐀 𝐒𝐏𝐄𝐂𝐈𝐅𝐈𝐂 𝐉𝐎𝐁?' for x in payload['embeds'][0]['fields']) == 1
     assert Discord(None,'',cfg).payload(record,test=True)['components'] == []
 

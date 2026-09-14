@@ -38,8 +38,9 @@ async def poll_once():
     async with poll_lock:
         started=datetime.now(timezone.utc)
         repo.set_state('scheduler',{'status':'running','phase':'scanning','last_poll_at':iso(started),'next_poll_at':iso(started+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0})
-        try: await pipeline.discord.update_status(repo,scheduler_snapshot())
-        except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
+        if not cfg.discord_bot_token:
+            try: await pipeline.discord.update_status(repo,scheduler_snapshot())
+            except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
         pipeline.begin_cycle()
         outcomes=await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo)))
         await pipeline.retry_notifications()
@@ -49,8 +50,9 @@ async def poll_once():
         # status update is best-effort: a webhook outage never stops polling.
         state.update({'sources_working':0,'linkedin_status':'READY' if cfg.brightdata_api_token else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
         repo.set_state('scheduler',state)
-        try: await pipeline.discord.update_status(repo,scheduler_snapshot())
-        except Exception as exc: logging.warning('discord_status_update_failed',extra={'error':str(exc)})
+        if not cfg.discord_bot_token:
+            try: await pipeline.discord.update_status(repo,scheduler_snapshot())
+            except Exception as exc: logging.warning('discord_status_update_failed',extra={'error':str(exc)})
         return outcomes
 async def worker():
     while True:
@@ -59,7 +61,9 @@ async def worker():
 @asynccontextmanager
 async def lifespan(app):
     repo.create_schema(); repo.expire_stale_jobs()
-    try: await pipeline.discord.update_status(repo,scheduler_snapshot())
+    try:
+        if cfg.discord_bot_token: await pipeline.discord.remove_webhook_control_panel(repo)
+        else: await pipeline.discord.update_status(repo,scheduler_snapshot())
     except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
     task=asyncio.create_task(worker()) if cfg.polling_enabled else None
     bot_task=asyncio.create_task(run_discord_bot(cfg,repo,manual_search,scheduler_snapshot,manual_scan)) if cfg.discord_bot_token else None

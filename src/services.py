@@ -138,8 +138,6 @@ class Discord:
         rows=[{'type':1,'components':row1}]
         actions=[('REVIEW APPLICATION','review'),('SAVE','saved'),('SKIP','ignored')]
         row2=[{'type':2,'style':5,'label':label,'url':url} for label,action in actions if (url:=self._link(job,action))]
-        if self.cfg and self.cfg.public_base_url:
-            row2.append({'type':2,'style':5,'label':'SEARCH JOBS','url':f'{self.cfg.public_base_url.rstrip("/")}/search'})
         if row2: rows.append({'type':1,'components':row2})
         kind,name=(job.source.split(':',1)+[''])[:2] if ':' in job.source else (job.source,'')
         footer=f'{kind.replace("_"," ").title()}' + (f' · {name}' if name else '')
@@ -188,8 +186,17 @@ class Discord:
             message_id=response.json().get('id')
             if message_id: repo.set_state('discord_control_panel_message_id',message_id)
         return 'CREATED'
+    async def remove_webhook_control_panel(self, repo: Repository):
+        """Migrate from webhook link components to the bot-owned panel."""
+        if not self.url: return
+        ids=[repo.state('discord_control_panel_message_id'),repo.state('discord_status_message_id'),repo.state('discord_welcome_message_id')]
+        async with httpx.AsyncClient(timeout=15) as client:
+            for message_id in {x for x in ids if x}:
+                response=await client.delete(f'{self.url}/messages/{message_id}')
+                if response.status_code not in (204,404): response.raise_for_status()
+        repo.set_state('discord_control_panel_message_id',None); repo.set_state('discord_status_message_id',None); repo.set_state('discord_welcome_message_id',None)
 class Pipeline:
-    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0
+    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(None if config.discord_bot_token else config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0
     def begin_cycle(self): self._cycle_notifications=0
     async def process(self, item:NormalizedJob, notify=True) -> tuple[Job|None,bool]:
         if not is_ph_location(item) or not is_active_listing(item): return None, False
@@ -204,6 +211,11 @@ class Pipeline:
         async with self._cycle_lock:
             if self._cycle_notifications>=self.config.max_notifications_per_cycle: return
             self._cycle_notifications+=1
+        if self.config.discord_bot_token:
+            job.notification_state='BOT_PENDING'
+            with self.repo.sessions() as s:
+                stored=s.get(Job,job.id); stored.notification_state='BOT_PENDING'; s.commit()
+            return
         try:
             job.notification_state=await self.discord.send(job)
             if job.notification_state=='SENT': job.status=JobStatus.NOTIFIED.value
