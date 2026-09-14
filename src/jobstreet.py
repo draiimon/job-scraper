@@ -60,6 +60,17 @@ def jobstreet_status(cfg: Settings, repo=None) -> str:
     return _auth_state(cfg, repo)
 
 
+def brightdata_jobstreet_status(cfg: Settings) -> str:
+    if (
+        cfg.brightdata_enabled
+        and cfg.brightdata_api_token
+        and cfg.brightdata_jobstreet_dataset_id
+        and cfg.brightdata_inputs("jobstreet")
+    ):
+        return "READY"
+    return "DISABLED"
+
+
 def _mark_auth_state(cfg: Settings, repo, status: str) -> None:
     if repo is None:
         return

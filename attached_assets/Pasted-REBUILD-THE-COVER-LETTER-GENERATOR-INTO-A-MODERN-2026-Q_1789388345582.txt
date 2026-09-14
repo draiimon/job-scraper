@@ -1,0 +1,1008 @@
+REBUILD THE COVER LETTER GENERATOR INTO A MODERN 2026-QUALITY APPLICATION WRITER.
+
+The current generator sounds robotic and low quality.
+
+Problems in the current output include:
+
+- copying resume bullets directly into paragraphs
+- repeating the same job or internship more than once
+- listing technologies unnaturally
+- capitalizing technologies in awkward ways
+- using placeholders such as [Your Name]
+- sounding generic
+- sounding overly confident for an early-career candidate
+- weak transitions between paragraphs
+- describing projects as if they were full professional employment
+- producing letters that read like a resume summary instead of a real cover letter
+
+I want the generator to produce polished, natural, professional cover letters suitable for technology job applications in 2026.
+
+The writing should feel HUMAN.
+
+It should not sound like:
+- ChatGPT-generated boilerplate
+- an old-fashioned cover-letter template
+- a copied resume
+- an overly enthusiastic graduate letter
+- a senior engineer exaggerating experience
+
+==================================================
+CANONICAL CANDIDATE PROFILE
+==================================================
+
+Use the following information as the ONLY authoritative candidate profile.
+
+NAME
+
+Mark Andrei R. Castillo
+
+LOCATION
+
+Bacoor City, Cavite, Philippines
+
+CONTACT
+
+Phone:
++63 953 852 1829
+
+Email:
+andreicastillofficial@gmail.com
+
+GitHub:
+https://github.com/draiimon
+
+Portfolio:
+https://www.draiimon.gt.tc/
+
+EDUCATION
+
+Bachelor of Science in Computer Science
+Technological Institute of the Philippines
+2021–2025
+
+Awards / Recognition:
+
+With Honor Distinction
+Service Excellence Award
+Service Stewardship Award
+
+==================================================
+PROFESSIONAL POSITIONING
+==================================================
+
+Mark is an EARLY-CAREER Computer Science graduate.
+
+He has:
+
+- one Cloud DevOps internship
+- freelance Full-Stack / AI development experience
+- hands-on cloud and DevOps projects
+- software-development projects
+- AI / NLP projects
+- Kubernetes and infrastructure lab experience
+
+Do NOT present him as inexperienced.
+
+But also NEVER present him as:
+
+- senior
+- highly experienced
+- an expert
+- an architect
+- an infrastructure specialist with many years of professional experience
+- someone who has owned large enterprise production environments
+
+His strongest positioning is:
+
+A Computer Science graduate with hands-on exposure to cloud infrastructure, software development, DevOps practices, automation, AI integration, databases, and deployment workflows.
+
+He has practical technical experience through internship work, freelance development, research, and projects.
+
+==================================================
+VERIFIED EXPERIENCE
+==================================================
+
+CLOUD DEVOPS INTERN
+
+Oaktree Innovations
+March 2025 – May 2025
+Biñan, Laguna
+
+Verified responsibilities/exposure:
+
+- worked with AWS cloud services including ECS and S3
+- worked with serverless/cloud deployment tasks
+- used Docker
+- used GitHub Actions
+- supported automated build and deployment workflows
+- worked with Terraform
+- worked with Infrastructure as Code
+- helped configure local and cloud environments
+- supported monitoring and troubleshooting
+- gained practical exposure to DevOps application-delivery practices
+
+Important:
+
+Do not exaggerate this internship.
+
+Do not claim:
+
+- architecture ownership
+- production ownership
+- enterprise-scale responsibility
+- senior-level decision making
+- years of DevOps experience
+
+==================================================
+FREELANCE EXPERIENCE
+==================================================
+
+Freelance Full-Stack / AI Developer
+School Web Portal
+April 2026 – May 2026
+Dasmariñas, Cavite
+
+Verified work:
+
+- built a school web portal
+- implemented student-information functionality
+- implemented appointment functionality
+- implemented administrative features
+- developed a RAG-based AI chatbot
+- used chunked student-manual content
+- connected the chatbot to a searchable knowledge base
+- integrated LLM services
+- worked with databases
+- worked on application flow
+- worked on AI integration
+- worked on deployment setup
+
+Do not turn this into exaggerated commercial enterprise experience.
+
+==================================================
+VERIFIED TECHNICAL SKILLS
+==================================================
+
+CLOUD / DEVOPS
+
+AWS:
+- ECS
+- Lambda
+- S3
+- DynamoDB
+- IAM
+- CloudWatch
+
+Docker
+Kubernetes — basic / hands-on level
+Terraform
+Infrastructure as Code
+Git
+GitHub
+GitHub Actions
+CI/CD
+Linux
+Ubuntu
+Bash
+Nginx
+
+PROGRAMMING / DEVELOPMENT
+
+Python
+Java
+C
+C++
+PHP
+SQL
+JavaScript
+
+Django
+Laravel
+React
+Next.js
+Node.js
+Express.js
+
+DATABASES
+
+PostgreSQL
+MySQL
+MongoDB
+Firebase
+DynamoDB
+pgvector
+
+AI / ML / NLP
+
+RAG
+LLM integration
+Google Gemini
+Groq
+DeepSeek
+mBERT
+LSTM
+Bi-GRU
+Hugging Face Transformers
+YOLOv8
+MediaPipe
+NLTK
+spaCy
+multilingual sentiment and emotion analysis
+
+AUTOMATION / TESTING
+
+Selenium
+Playwright
+
+SYSTEMS
+
+Linux
+Ubuntu
+Bash
+Python scripting
+Git
+command-line tools
+basic system troubleshooting
+
+==================================================
+VERIFIED PROJECTS
+==================================================
+
+Use projects ONLY when directly useful for the role.
+
+OAKTREE
+
+Cloud-ready DevOps project using:
+
+Docker
+AWS ECS
+Terraform
+GitHub Actions
+CI/CD
+Infrastructure as Code
+
+CLOUD CAPTURE
+
+Cloud application using:
+
+AWS S3
+DynamoDB
+Lambda
+Terraform
+
+SCHOOL WEB PORTAL & RAG KNOWLEDGE ASSISTANT
+
+Full-stack application using:
+
+Node.js
+Express.js
+PostgreSQL
+pgvector
+Google Gemini
+Groq
+Docker
+
+KUBERNETES DEPLOYMENT LAB
+
+Hands-on Kubernetes environment using:
+
+Docker
+Pods
+Deployments
+Services
+Nginx Ingress
+Linux / Ubuntu
+
+PANICSENSE PH
+
+Research/thesis project involving:
+
+mBERT
+Bi-GRU
+LSTM
+multilingual sentiment analysis
+AWS
+Terraform
+
+SMARTSORT
+
+YOLOv8-based waste classification project.
+
+SIGNABC
+
+MediaPipe + Python sign-to-speech project.
+
+MOODSYNC
+
+NLP-based chatbot for emotional-tone analysis.
+
+SPEAKSMART
+
+Speech-to-text / NLP project using:
+
+Azure Cognitive Services
+NLTK
+spaCy
+Hugging Face Transformers
+
+==================================================
+2026 COVER LETTER STYLE
+==================================================
+
+The final letter should feel appropriate for a 2026 technology application.
+
+Use a MODERN professional style.
+
+Avoid old-fashioned business-letter language when unnecessary.
+
+Do NOT use phrases such as:
+
+"Please accept this letter as my formal application"
+
+"It is with great enthusiasm that I submit my application"
+
+"I am writing to express my keen interest"
+
+"I believe I would be an excellent asset to your esteemed organization"
+
+"I am certain my skills make me the perfect candidate"
+
+These sound generic, dated, or AI-generated.
+
+Prefer direct, natural openings.
+
+Examples of acceptable tone:
+
+"The Infrastructure Developer opportunity at Morgan McKinley stood out to me because it combines cloud, infrastructure, and development work that closely matches the areas I have been building experience in."
+
+or:
+
+"I am interested in the Junior Cloud Engineer position at [Company], particularly because the role combines AWS, infrastructure automation, and deployment work with technologies I have used during my internship and technical projects."
+
+The generator does NOT have to use these exact sentences.
+
+They are tone examples only.
+
+==================================================
+MODERN HEADER FORMAT
+==================================================
+
+Use a clean compact header:
+
+Mark Andrei R. Castillo
+Bacoor City, Cavite, Philippines
++63 953 852 1829
+andreicastillofficial@gmail.com
+github.com/draiimon
+www.draiimon.gt.tc
+
+[Current Asia/Manila Date]
+
+Hiring Team
+[Company Name]
+
+Dear Hiring Team,
+
+Do NOT include a complete employer postal address unless the job posting provides one and it improves the letter.
+
+Do NOT invent:
+
+- hiring manager
+- recruiter
+- office address
+- department name
+
+If the hiring manager is known from reliable job data:
+
+Dear [Name],
+
+Otherwise:
+
+Dear Hiring Team,
+
+==================================================
+LETTER STRUCTURE
+==================================================
+
+Target approximately:
+
+250–350 words
+
+Maximum:
+around 400 words only when genuinely useful.
+
+Use 4 concise paragraphs.
+
+Do NOT create one giant text block.
+
+--------------------------------------------------
+PARAGRAPH 1 — ROLE-SPECIFIC OPENING
+--------------------------------------------------
+
+Mention:
+
+- exact job title
+- company
+- why this particular role is relevant
+
+Keep this short.
+
+Do NOT begin with a generic life story.
+
+Do NOT overpraise the company if there is no factual company information available.
+
+Avoid fake statements such as:
+
+"I have always admired your company."
+
+unless supported by real data.
+
+--------------------------------------------------
+PARAGRAPH 2 — MOST RELEVANT EXPERIENCE
+--------------------------------------------------
+
+Choose ONLY the strongest relevant professional experience.
+
+Usually:
+
+Oaktree DevOps internship
+
+OR
+
+freelance Full-Stack / AI work
+
+OR both briefly if genuinely relevant.
+
+Do NOT copy bullets directly from the resume.
+
+Turn the experience into natural prose.
+
+Bad:
+
+"My resume shows hands-on work with AWS, TERRAFORM, CI/CD, PYTHON."
+
+Bad:
+
+"Cloud DevOps Intern — Oaktree Innovations Mar-May 2025: Worked with AWS..."
+
+Good style:
+
+"During my Cloud DevOps internship at Oaktree Innovations, I worked with AWS, Docker, GitHub Actions, and Terraform while supporting deployment workflows and environment configuration. The experience gave me practical exposure to Infrastructure as Code, CI/CD, troubleshooting, and cloud-based application delivery."
+
+Keep the claims accurate.
+
+--------------------------------------------------
+PARAGRAPH 3 — TECHNICAL FOUNDATION / PROJECT
+--------------------------------------------------
+
+Choose ONE relevant project or technical area.
+
+Do NOT list every project.
+
+Examples:
+
+Infrastructure / Cloud:
+Kubernetes Deployment Lab
+Cloud Capture
+Oaktree project
+
+Software:
+School Web Portal
+backend/frontend/database work
+
+AI:
+PanicSense PH
+RAG assistant
+
+Explain WHY the project matters for the role.
+
+Do not simply list technologies.
+
+Bad:
+
+"I know Kubernetes, Docker, Linux, AWS, Terraform, Python, JavaScript, Django, Laravel..."
+
+Good:
+
+"I also built a hands-on Kubernetes environment using containerized workloads, Services, Deployments, and Nginx Ingress, which strengthened my understanding of how applications are deployed and exposed in Linux-based environments."
+
+--------------------------------------------------
+PARAGRAPH 4 — CLOSING
+--------------------------------------------------
+
+Keep the closing modest and professional.
+
+Express:
+
+- interest in contributing
+- willingness to continue developing professionally
+- openness to discussing the role
+
+Do not sound desperate.
+
+Do not sound arrogant.
+
+Good tone:
+
+"I would welcome the opportunity to discuss how my technical foundation, internship experience, and willingness to continue learning could support the team."
+
+Finish with:
+
+Thank you for your time and consideration.
+
+Sincerely,
+
+Mark Andrei R. Castillo
+
+==================================================
+TONE RULES
+==================================================
+
+The candidate should sound:
+
+professional
+competent
+grounded
+curious
+adaptable
+technically capable
+early-career
+genuine
+confident without arrogance
+
+The letter should NOT sound:
+
+desperate
+overly humble
+apologetic
+senior
+salesy
+corporate
+robotic
+generic
+AI-generated
+
+IMPORTANT:
+
+Do NOT write:
+
+"I know I do not have much experience..."
+
+Do NOT apologize for being early-career.
+
+Do NOT write:
+
+"Although I lack professional experience..."
+
+because that unnecessarily weakens the application.
+
+Instead allow the experience and projects to speak for themselves.
+
+==================================================
+WORDS TO AVOID
+==================================================
+
+Avoid excessive use of:
+
+passionate
+excited
+thrilled
+dynamic
+innovative
+cutting-edge
+highly skilled
+expert
+extensive experience
+proven track record
+seasoned
+mastered
+deep expertise
+exceptional
+perfect candidate
+
+These phrases often sound exaggerated or AI-generated.
+
+Use straightforward technical language instead.
+
+==================================================
+ROLE-SPECIFIC TAILORING
+==================================================
+
+For DEVOPS / CLOUD / INFRASTRUCTURE:
+
+Prioritize:
+
+Oaktree internship
+AWS
+Docker
+Terraform
+GitHub Actions
+CI/CD
+Linux
+Cloud Capture
+Kubernetes Deployment Lab
+
+Possible themes:
+
+deployment
+Infrastructure as Code
+cloud environments
+automation
+CI/CD
+Linux
+monitoring
+troubleshooting
+containerization
+
+--------------------------------------------------
+
+For SOFTWARE ENGINEERING:
+
+Prioritize:
+
+freelance Full-Stack / AI project
+Python
+JavaScript
+Node.js
+Express
+Django
+Laravel
+PostgreSQL
+REST APIs
+Docker
+
+Possible themes:
+
+backend development
+application flow
+APIs
+databases
+full-stack implementation
+deployment
+
+--------------------------------------------------
+
+For IT SUPPORT / SYSTEMS / TECHNICAL SUPPORT:
+
+Prioritize:
+
+Linux
+Ubuntu
+command line
+basic troubleshooting
+environment configuration
+deployment support
+technical communication
+problem solving
+
+Do not pretend the candidate previously held an IT Support job.
+
+--------------------------------------------------
+
+For AI / ML:
+
+Prioritize:
+
+PanicSense PH
+RAG
+Python
+mBERT
+LSTM
+Bi-GRU
+Gemini
+Groq
+Hugging Face
+
+Clearly distinguish:
+
+research/project experience
+
+from:
+
+professional employment.
+
+==================================================
+JOB DESCRIPTION ANALYSIS
+==================================================
+
+Before generating the letter:
+
+1. Analyze the actual job description.
+
+2. Identify the 3–5 most important relevant requirements.
+
+3. Match those requirements against the canonical profile.
+
+4. Use ONLY the strongest matching facts.
+
+5. Ignore unrelated skills.
+
+The letter should NOT attempt to mention everything on the resume.
+
+For example:
+
+If the role asks for:
+
+AWS
+Terraform
+CI/CD
+Linux
+
+then prioritize:
+
+Oaktree internship
+Terraform
+AWS
+GitHub Actions
+Linux
+Cloud Capture / Kubernetes if helpful.
+
+Do not suddenly discuss:
+
+YOLOv8
+MediaPipe
+NLP
+
+unless relevant.
+
+==================================================
+EXPERIENCE VS PROJECT DISTINCTION
+==================================================
+
+This is VERY important.
+
+Professional experience:
+
+Oaktree Innovations
+Freelance School Web Portal
+
+Projects / research:
+
+Cloud Capture
+Kubernetes Deployment Lab
+PanicSense PH
+SmartSort
+SignABC
+MoodSync
+SpeakSmart
+
+Never describe a project as an employer.
+
+Never imply project work was paid professional employment unless canonical data explicitly says so.
+
+==================================================
+FACTUAL VALIDATION
+==================================================
+
+Every final cover letter must pass factual validation.
+
+Validate every statement against the canonical profile.
+
+Reject or rewrite anything that introduces:
+
+- fabricated employment
+- fabricated years
+- fabricated certifications
+- fabricated metrics
+- fabricated achievements
+- fabricated client names
+- fabricated responsibilities
+- fabricated leadership outcomes
+- fabricated cloud scale
+- fabricated production ownership
+- fabricated expertise level
+
+If Gemini adds an unsupported statement:
+
+REMOVE IT.
+
+==================================================
+AI WORKFLOW
+==================================================
+
+Use this architecture:
+
+JOB DESCRIPTION
+↓
+extract requirements
+↓
+select verified candidate facts
+↓
+generate deterministic factual outline/draft
+↓
+Gemini improves wording and flow
+↓
+fact-validation pass
+↓
+quality-validation pass
+↓
+final cover letter
+
+Gemini is the EDITOR.
+
+Gemini is NOT the source of candidate facts.
+
+If Gemini is unavailable:
+
+use the deterministic professional version.
+
+The application workflow must never fail solely because Gemini is unavailable.
+
+==================================================
+QUALITY VALIDATION
+==================================================
+
+Before returning a cover letter verify:
+
+Candidate name:
+PRESENT
+
+Candidate email:
+PRESENT
+
+Phone:
+PRESENT
+
+GitHub:
+PRESENT
+
+Portfolio:
+PRESENT
+
+Correct job title:
+PRESENT
+
+Correct company:
+PRESENT
+
+Current date:
+PRESENT
+
+Placeholder text:
+NONE
+
+Duplicate experience:
+NONE
+
+Duplicate sentences:
+NONE
+
+Resume bullet dumping:
+NONE
+
+Unsupported claims:
+NONE
+
+Fake metrics:
+NONE
+
+Fake certifications:
+NONE
+
+Random uppercase technologies:
+NONE
+
+Double punctuation:
+NONE
+
+Generic AI opening:
+NONE
+
+Professional closing:
+PRESENT
+
+Word count:
+approximately 250–350
+
+==================================================
+DISCORD PREVIEW
+==================================================
+
+VIEW COVER LETTER must display a clean Discord-native preview.
+
+Header:
+
+𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑
+
+Then show the letter with readable paragraph spacing.
+
+Do NOT output:
+
+[image](...)
+avatar URLs
+svg
+raw Discord asset URLs
+broken Markdown
+debug information
+
+Footer:
+
+After Hours Job Hunter • Made by masoncalix
+
+If Discord embed limits prevent the full letter from fitting:
+
+split it cleanly into multiple sections/messages
+or attach the generated PDF.
+
+==================================================
+PDF
+==================================================
+
+Generate a professional PDF named:
+
+Mark_Andrei_Castillo_Cover_Letter_{CompanySlug}_{YYYY-MM-DD}.pdf
+
+Use:
+
+clean modern typography
+normal margins
+black/white professional layout
+clear contact header
+proper paragraph spacing
+no decorative graphics
+no AI-looking design
+no excessive icons
+
+==================================================
+REGRESSION TESTS
+==================================================
+
+Add tests that reject:
+
+[Your Name]
+
+duplicate Oaktree paragraphs
+
+duplicate experience descriptions
+
+resume-bullet dumping
+
+random ALL CAPS skill strings
+
+"extensive experience"
+
+"deep expertise"
+
+"seasoned professional"
+
+unsupported years of experience
+
+unsupported certifications
+
+invented metrics
+
+fake recruiter names
+
+project work presented as employment
+
+double punctuation
+
+missing contact information
+
+missing company name
+
+missing job title
+
+overly long letters
+
+==================================================
+FINAL EXPECTATION
+==================================================
+
+The final output should read like a thoughtful candidate wrote it after understanding the job posting.
+
+It should feel personalized.
+
+It should sound competent.
+
+It should show relevant technical experience.
+
+It should NOT oversell the candidate.
+
+It should NOT apologize for being early-career.
+
+It should NOT simply summarize the resume.
+
+It should explain WHY the most relevant experience connects to THIS role.
+
+Implement this without breaking the existing Discord application workflow.

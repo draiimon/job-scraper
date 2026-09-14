@@ -67,6 +67,7 @@ class Settings(BaseSettings):
     jobstreet_search_terms_json: str = '["DevOps", "Cloud", "IT Support"]'
     jobstreet_max_results: int = 50
     jobstreet_auth_timeout_seconds: int = 600
+    jobstreet_scan_timeout_seconds: int = 60
 
     @property
     def source_targets(self) -> list[dict]:

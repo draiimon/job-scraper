@@ -16,7 +16,7 @@ from .applications import eligible_for_email, write_package, revised_cover_lette
 from .ai import gemini
 from .security import ActionTokens
 from .brightdata import brightdata_sources
-from .jobstreet import jobstreet_sources, jobstreet_status
+from .jobstreet import brightdata_jobstreet_status, jobstreet_sources, jobstreet_status
 from .manual_search import ManualJobSearch
 from .discord_bot import run_discord_bot
 from .resumes import extract_resume_text
@@ -34,7 +34,7 @@ def scheduler_snapshot():
     if next_poll:
         try: seconds=max(0,int((datetime.fromisoformat(next_poll)-datetime.now(timezone.utc)).total_seconds()))
         except ValueError: pass
-        saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':jobstreet_status(cfg,repo)})
+        saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg)})
     return saved
 async def poll_once(manual=False):
     async with poll_lock:
@@ -56,7 +56,8 @@ async def poll_once(manual=False):
         semaphore=asyncio.Semaphore(cfg.scan_source_concurrency)
         async def limited(source):
             async with semaphore:
-                try: return await asyncio.wait_for(pipeline.run_source(source),timeout=cfg.scan_source_timeout_seconds)
+                timeout = cfg.jobstreet_scan_timeout_seconds if source.name == 'jobstreet:google-session' else cfg.scan_source_timeout_seconds
+                try: return await asyncio.wait_for(pipeline.run_source(source),timeout=timeout)
                 except asyncio.TimeoutError:
                     repo.health_failure(source.name,'scan source timeout')
                     return {'source':source.name,'discovered':0,'new':0,'filtered':0,'timeout':True}
@@ -66,7 +67,7 @@ async def poll_once(manual=False):
         checked=sum(x['discovered'] for x in outcomes); new=sum(x['new'] for x in outcomes); filtered=sum(x['filtered'] for x in outcomes)
         state={'status':'running','phase':'complete','last_poll_at':iso(finished),'next_poll_at':scheduled_next if manual else iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':pipeline._cycle_notifications,'duplicates_ignored':max(0,checked-new-filtered),'sources_loaded':len(sources)}
         # status update is best-effort: a webhook outage never stops polling.
-        state.update({'sources_working':sum(1 for source in sources if repo.health(source.name).status=='healthy'),'linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':jobstreet_status(cfg,repo)})
+        state.update({'sources_working':sum(1 for source in sources if repo.health(source.name).status=='healthy'),'linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg)})
         repo.set_state('scheduler',state)
         if not cfg.discord_bot_token:
             try: await pipeline.discord.update_status(repo,scheduler_snapshot())

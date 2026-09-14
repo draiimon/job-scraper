@@ -53,7 +53,7 @@ Slow button and modal callbacks acknowledge immediately and move synchronous dat
 
 If `SOURCE_TARGETS_JSON` is valid and non-empty, it overrides `config/job_sources.json`. Empty values fall back to the checked-in JSON file. The checked-in fallback currently contains six public boards; the active verified deployment loaded 26 targets through its valid override. Invalid or empty source configuration fails explicitly instead of silently producing zero sources.
 
-LinkedIn is disabled unless Bright Data is enabled, authenticated, supplied with valid inputs, and configured with the LinkedIn dataset. JobStreet discovery uses a manually authenticated Playwright Google session at `data/private/jobstreet_session.json`; it reports `AUTH REQUIRED` when no valid saved session is available. It never stores Google passwords, automates 2FA, bypasses CAPTCHA, or submits applications.
+LinkedIn is disabled unless Bright Data is enabled, authenticated, supplied with valid inputs, and configured with the LinkedIn dataset. Bright Data JobStreet remains a separate optional adapter. Authenticated browser discovery uses a manually authenticated Playwright Google session at `data/private/jobstreet_session.json`; it reports `AUTH REQUIRED` when no valid saved session is available. It never stores Google passwords, automates 2FA, bypasses CAPTCHA, or submits applications.
 
 ## Filtering rules
 

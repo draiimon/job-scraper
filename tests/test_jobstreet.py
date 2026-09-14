@@ -1,10 +1,16 @@
 from datetime import datetime, timezone
+from types import SimpleNamespace
+
+import pytest
 
 from src.config import Settings
 from src.jobstreet import (
     JOBSTREET_SOURCE_NAME,
+    JobStreetAuthRequired,
+    JobStreetBrowserSource,
     _normalize_listing,
     _parse_posted,
+    authenticate_jobstreet,
     has_storage_state,
     jobstreet_sources,
     jobstreet_status,
@@ -47,3 +53,161 @@ def test_jobstreet_normalizes_visible_discovery_listing():
 def test_jobstreet_relative_date_is_timezone_aware():
     posted = _parse_posted("1 day ago", datetime(2026, 9, 14, tzinfo=timezone.utc))
     assert posted == datetime(2026, 9, 13, tzinfo=timezone.utc)
+
+
+class _FakeLocator:
+    def __init__(self, page, kind):
+        self.page = page
+        self.kind = kind
+        self.first = self
+
+    async def count(self):
+        return 1
+
+    async def click(self):
+        self.page.actions.append(("click", self.kind))
+        if "google" in self.kind:
+            self.page.url = "https://ph.jobstreet.com/"
+
+    async def inner_text(self, timeout=None):
+        return "My Account"
+
+    async def evaluate_all(self, script):
+        return self.page.rows
+
+
+class _FakePage:
+    def __init__(self, rows=None, url="https://ph.jobstreet.com/", expired=False):
+        self.rows = rows or []
+        self.url = url
+        self.expired = expired
+        self.actions = []
+
+    async def goto(self, url, **kwargs):
+        self.actions.append(("goto", url))
+        self.url = "https://ph.jobstreet.com/login" if self.expired else url
+
+    def get_by_role(self, role, name):
+        return _FakeLocator(self, f"{role}:google")
+
+    def locator(self, selector):
+        return _FakeLocator(self, selector)
+
+    async def wait_for_timeout(self, milliseconds):
+        return None
+
+
+class _FakeContext:
+    def __init__(self, page):
+        self.page = page
+
+    async def new_page(self):
+        return self.page
+
+    async def storage_state(self, path):
+        with open(path, "w", encoding="utf-8") as saved:
+            saved.write('{"cookies": [], "origins": []}')
+
+    async def close(self):
+        return None
+
+
+class _FakeBrowser:
+    def __init__(self, page):
+        self.page = page
+        self.launch_options = None
+
+    async def new_context(self, **kwargs):
+        return _FakeContext(self.page)
+
+    async def close(self):
+        return None
+
+
+class _FakePlaywrightContext:
+    def __init__(self, page):
+        self.page = page
+        self.browser = _FakeBrowser(page)
+        self.chromium = SimpleNamespace(launch=self.launch)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return None
+
+    async def launch(self, **kwargs):
+        self.browser.launch_options = kwargs
+        return self.browser
+
+
+@pytest.mark.asyncio
+async def test_manual_auth_uses_headed_google_start_without_credential_automation(monkeypatch, tmp_path):
+    import playwright.async_api
+
+    page = _FakePage()
+    playwright_context = _FakePlaywrightContext(page)
+    monkeypatch.setattr(playwright.async_api, "async_playwright", lambda: playwright_context)
+    cfg = Settings(
+        jobstreet_session_path=str(tmp_path / "private" / "jobstreet_session.json"),
+        jobstreet_auth_timeout_seconds=1,
+    )
+
+    saved = await authenticate_jobstreet(cfg)
+
+    assert saved.is_file()
+    assert playwright_context.browser.launch_options == {"headless": False}
+    assert any(action[0] == "click" and "google" in action[1] for action in page.actions)
+    assert not any(action[0] in {"fill", "press", "type"} for action in page.actions)
+
+
+@pytest.mark.asyncio
+async def test_authenticated_source_discovers_normalized_listings(monkeypatch, tmp_path):
+    import playwright.async_api
+
+    state_path = tmp_path / "jobstreet_session.json"
+    state_path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+    page = _FakePage(
+        rows=[
+            {
+                "url": "https://ph.jobstreet.com/job/456",
+                "title": "Cloud Support Engineer",
+                "text": "Cloud Support Engineer\nCloud PH\nManila, Philippines\nToday\nAWS Linux",
+                "posted": "Today",
+            }
+        ]
+    )
+    playwright_context = _FakePlaywrightContext(page)
+    monkeypatch.setattr(playwright.async_api, "async_playwright", lambda: playwright_context)
+    cfg = Settings(jobstreet_session_path=str(state_path), jobstreet_search_terms_json='["Cloud"]')
+
+    jobs = await JobStreetBrowserSource(cfg).fetch()
+
+    assert len(jobs) == 1
+    assert jobs[0].title == "Cloud Support Engineer"
+    assert "keywords=Cloud" in page.actions[0][1]
+    assert playwright_context.browser.launch_options == {"headless": True}
+
+
+@pytest.mark.asyncio
+async def test_expired_session_reports_auth_required_and_records_status(monkeypatch, tmp_path):
+    import playwright.async_api
+
+    state_path = tmp_path / "jobstreet_session.json"
+    state_path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
+    page = _FakePage(url="https://ph.jobstreet.com/login", expired=True)
+    playwright_context = _FakePlaywrightContext(page)
+    monkeypatch.setattr(playwright.async_api, "async_playwright", lambda: playwright_context)
+
+    class Repo:
+        def __init__(self):
+            self.values = {}
+
+        def set_state(self, key, value):
+            self.values[key] = value
+
+    repo = Repo()
+    cfg = Settings(jobstreet_session_path=str(state_path))
+    with pytest.raises(JobStreetAuthRequired, match="AUTH REQUIRED"):
+        await JobStreetBrowserSource(cfg, repo).fetch()
+    assert repo.values["jobstreet_auth_status"]["status"] == "AUTH REQUIRED"
