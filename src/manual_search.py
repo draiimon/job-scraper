@@ -15,7 +15,9 @@ class ManualJobSearch:
         text=(freshness_text or 'Past 24 hours').lower()
         return 1 if '24' in text or 'day' in text else 7 if 'week' in text or '7' in text else 3
     async def find(self, role: str, location='Philippines', freshness_text='Past 24 hours', remote='', limit=10):
-        if not self.cfg.brightdata_enabled or not self.cfg.brightdata_api_token: raise SourceError('Bright Data LinkedIn search is not configured')
+        # This is an explicit user-initiated search, so it may use the configured
+        # token even when automatic Bright Data polling is disabled.
+        if not self.cfg.brightdata_api_token: raise SourceError('Bright Data LinkedIn search is not configured')
         limit=max(1,min(int(limit),10)); age=self._max_age(freshness_text)
         key=(role.strip().lower(),location.strip().lower(),freshness_text.strip().lower(),remote.strip().lower(),limit)
         cached=self.cache.get(key)
