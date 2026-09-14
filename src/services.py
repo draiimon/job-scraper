@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings
 from .jobs import NormalizedJob, evaluate, extract_skills, is_ph_location, freshness, is_active_listing
-from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState
+from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, ResumeProfile
 from .security import ActionTokens
 log=logging.getLogger(__name__)
 class Repository:
@@ -108,6 +108,32 @@ class Repository:
             if item: item.value=encoded
             else: s.add(AppState(key=key,value=encoded))
             s.commit()
+    def resume_record(self):
+        with self.sessions() as s:
+            item=s.get(ResumeProfile,1)
+            if not item: return None
+            return {'filename':item.filename,'content_type':item.content_type,'file_data':item.file_data,'extracted_text':item.extracted_text,'uploaded_at':item.uploaded_at}
+    def resume_info(self):
+        item=self.resume_record()
+        if not item: return None
+        return {key:item[key] for key in ('filename','content_type','uploaded_at')}
+    def resume_text(self):
+        item=self.resume_record()
+        return item['extracted_text'] if item else None
+    def save_resume(self, filename: str, content_type: str, file_data: bytes, extracted_text: str):
+        with self.sessions() as s:
+            item=s.get(ResumeProfile,1)
+            if not item:
+                item=ResumeProfile(id=1,filename=filename,content_type=content_type,file_data=file_data,extracted_text=extracted_text)
+                s.add(item)
+            else:
+                item.filename=filename; item.content_type=content_type; item.file_data=file_data; item.extracted_text=extracted_text; item.uploaded_at=datetime.now(timezone.utc)
+            for job in s.scalars(select(Job)).all():
+                metadata=dict(job.raw_metadata or {})
+                metadata.pop('cover_letter',None); metadata.pop('cover_letter_mode',None)
+                job.raw_metadata=metadata
+            s.commit()
+            return self.resume_info()
 class Discord:
     def __init__(self,url:str|None, motivations:list[str]|str='', cfg:Settings|None=None):
         configured=motivations if isinstance(motivations,list) else [motivations]

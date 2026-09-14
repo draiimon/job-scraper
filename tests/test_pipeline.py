@@ -15,6 +15,7 @@ from src.brightdata import BrightDataClient, BrightDataJobs
 from src.sources import SourceError
 from src.manual_search import ManualJobSearch
 from src.main import search_page
+from src.resumes import extract_resume_text
 
 def job(**overrides):
     values=dict(source='test',source_job_id='one',title='Junior DevOps Engineer',company='Cloud PH',location='Taguig, Philippines — Hybrid',description='Fresh graduate AWS Docker Terraform Linux CI/CD Kubernetes.',url='https://example.com/one',date_posted=datetime.now(timezone.utc)-timedelta(hours=2))
@@ -60,6 +61,45 @@ def test_safe_application_materials():
     assert eligible_for_email(record,85)[0]
     letter=cover_letter(record)
     assert 'AWS' in letter and 'years of experience' not in letter
+
+def test_cover_letter_uses_uploaded_resume_evidence():
+    class Fake: pass
+    record=Fake(); record.title='Junior Cloud DevOps Engineer'; record.company='Cloud PH'; record.description='AWS Docker Terraform GitHub Actions Linux'; record.score=90; record.application_email='jobs@example.com'; record.warnings=[]
+    resume='''PROFESSIONAL SUMMARY
+Computer Science graduate with cloud and DevOps experience.
+EXPERIENCE
+Cloud DevOps Intern — Oaktree Innovations
+• Worked with AWS cloud services including ECS and S3.
+• Used Docker and GitHub Actions for deployment workflows.
+• Worked with Terraform for Infrastructure as Code.
+RESEARCH & PROJECTS
+● Oaktree
+Cloud-ready DevOps platform using Docker, AWS ECS, Terraform, and GitHub Actions.
+'''
+    letter=cover_letter(record,resume)
+    assert 'Oaktree' in letter and 'Terraform' in letter and 'AWS' in letter
+    assert 'years of experience' not in letter
+
+def test_pdf_resume_text_extraction():
+    import pymupdf
+    document=pymupdf.open()
+    page=document.new_page()
+    page.insert_text((72,72),'Computer Science graduate with cloud and DevOps experience. Cloud DevOps Intern — Oaktree Innovations. Worked with AWS, Docker, Terraform, Linux, and GitHub Actions on application deployment and infrastructure tasks.')
+    pdf=document.tobytes()
+    document.close()
+    extracted=extract_resume_text(pdf,'resume.pdf')
+    assert 'Cloud DevOps Intern' in extracted and 'Oaktree Innovations' in extracted
+
+def test_resume_replacement_clears_cached_cover_letters(tmp_path):
+    repo=Repository(f'sqlite:///{tmp_path}/resume.db'); repo.create_schema()
+    stored=repo.save(job(),85,['AWS'],[])
+    with repo.sessions() as s:
+        record=s.get(Job,stored.id); record.raw_metadata={'cover_letter':'old','cover_letter_mode':'TEMPLATE','keep':'yes'}; s.commit()
+    info=repo.save_resume('resume.pdf','application/pdf',b'%PDF', 'Oaktree AWS Terraform')
+    assert info['filename']=='resume.pdf' and repo.resume_text()=='Oaktree AWS Terraform'
+    with repo.sessions() as s:
+        record=s.get(Job,stored.id)
+        assert 'cover_letter' not in record.raw_metadata and record.raw_metadata['keep']=='yes'
 
 def test_cross_source_and_alert_deduplication():
     email=alert_to_job('linkedin_alert','Junior DevOps Engineer','Cloud PH','Taguig, Philippines','https://linkedin.example/job',datetime.now(timezone.utc),'AWS Docker')

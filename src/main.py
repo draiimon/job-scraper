@@ -3,7 +3,7 @@ import asyncio, logging
 from datetime import datetime, timedelta, timezone
 from html import escape
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -18,6 +18,7 @@ from .security import ActionTokens
 from .brightdata import brightdata_sources
 from .manual_search import ManualJobSearch
 from .discord_bot import run_discord_bot
+from .resumes import extract_resume_text
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
 cfg=settings(); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
 manual_search=ManualJobSearch(cfg,repo)
@@ -79,14 +80,42 @@ async def lifespan(app):
         bot_task.cancel()
         try: await bot_task
         except asyncio.CancelledError: pass
-app=FastAPI(title='Philippine Job Agent',lifespan=lifespan)
+app=FastAPI(title='After Hours Job Hunter',lifespan=lifespan)
 @app.api_route('/',methods=['GET','HEAD'],include_in_schema=False,response_class=HTMLResponse)
 def home():
-    return HTMLResponse('''<!doctype html><html><head><title>After Hours Job Hunter</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#111827;color:#f8fafc;font:16px system-ui,sans-serif}main{max-width:760px;margin:10vh auto;padding:32px}h1{color:#f59e0b;font-size:clamp(2rem,5vw,3.5rem);margin:0 0 12px}p{color:#cbd5e1;line-height:1.6}nav{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}a{color:#111827;background:#f59e0b;border-radius:8px;padding:11px 16px;text-decoration:none;font-weight:700}a.secondary{background:#374151;color:#f8fafc}</style></head><body><main><p>AFTER HOURS JOB HUNTER</p><h1>Philippine tech jobs, found while you sleep.</h1><p>Automated monitoring for recent entry-level and junior technology roles in the Philippines and Remote PH. Discord is the primary control center.</p><nav><a href="/search">Search jobs</a><a href="/latest-page">Latest matches</a><a class="secondary" href="/status">System status</a><a class="secondary" href="/docs">API docs</a></nav></main></body></html>''')
+    return HTMLResponse('''<!doctype html><html><head><title>After Hours Job Hunter</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#111827;color:#f8fafc;font:16px system-ui,sans-serif}main{max-width:760px;margin:10vh auto;padding:32px}h1{color:#f59e0b;font-size:clamp(2rem,5vw,3.5rem);margin:0 0 12px}p{color:#cbd5e1;line-height:1.6}nav{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}a{color:#111827;background:#f59e0b;border-radius:8px;padding:11px 16px;text-decoration:none;font-weight:700}a.secondary{background:#374151;color:#f8fafc}</style></head><body><main><p>AFTER HOURS JOB HUNTER</p><h1>Philippine tech jobs, found while you sleep.</h1><p>Automated monitoring for recent entry-level and junior technology roles in the Philippines and Remote PH. Discord is the primary control center.</p><nav><a href="/search">Search jobs</a><a href="/latest-page">Latest matches</a><a class="secondary" href="/resume">Manage resume</a><a class="secondary" href="/status">System status</a><a class="secondary" href="/docs">API docs</a></nav></main></body></html>''')
 
 @app.get('/favicon.ico',include_in_schema=False)
 def favicon():
     return Response(status_code=204)
+
+def resume_upload_link():
+    token=ActionTokens(cfg).issue_control('resume')
+    return f'/resume/{token}' if token else None
+
+@app.get('/resume',response_class=HTMLResponse)
+def resume_status_page():
+    info=repo.resume_info()
+    link=resume_upload_link()
+    current=f'<p><strong>Saved resume:</strong> {escape(info["filename"])}<br><strong>Uploaded:</strong> {escape(str(info["uploaded_at"]))}</p>' if info else '<p>No resume is saved in the database yet.</p>'
+    upload=f'<p><a href="{link}">Open secure resume upload</a></p>' if link else '<p>Set APP_SECRET_KEY to enable secure resume uploads.</p>'
+    return HTMLResponse(f'<!doctype html><title>Resume</title><h1>Resume context</h1>{current}<p>The saved PDF and extracted text are used when generating cover letters. Uploading a new PDF replaces the saved resume and clears cached letters.</p>{upload}<p><a href="/">Back to job hunter</a></p>')
+
+@app.get('/resume/{token}',response_class=HTMLResponse)
+def resume_upload_page(token:str):
+    if not ActionTokens(cfg).verify_control(token,'resume'): raise HTTPException(403,'invalid or expired resume upload link')
+    return HTMLResponse(f'''<!doctype html><title>Upload resume</title><h1>Upload or replace resume</h1><p>PDF only, maximum 10 MB. This will replace the resume currently used for cover letters.</p><form method="post" enctype="multipart/form-data"><input type="file" name="resume" accept=".pdf,application/pdf" required><button type="submit">SAVE RESUME</button></form><p><a href="/resume">Cancel</a></p>''')
+
+@app.post('/resume/{token}',response_class=HTMLResponse)
+async def upload_resume(token:str, resume:UploadFile=File(...)):
+    if not ActionTokens(cfg).verify_control(token,'resume'): raise HTTPException(403,'invalid or expired resume upload link')
+    data=await resume.read()
+    try:
+        text=extract_resume_text(data,resume.filename or 'resume.pdf')
+    except ValueError as exc:
+        raise HTTPException(400,str(exc)) from exc
+    info=repo.save_resume(resume.filename or 'resume.pdf',resume.content_type or 'application/pdf',data,text)
+    return HTMLResponse(f'<h1>Resume saved</h1><p>{escape(info["filename"])} is now the source of truth for new cover letters.</p><p>Existing cached cover letters were cleared so the next APPLY NOW uses this resume.</p><p><a href="/resume">View resume status</a></p>')
 @app.get('/health')
 def health():
     try:
@@ -94,7 +123,7 @@ def health():
     except Exception as e: raise HTTPException(503,detail='database unavailable') from e
     with repo.sessions() as s:
         sources=s.scalars(select(SourceHealth)).all()
-    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_bot_token or cfg.discord_webhook_url),'discord_bot':repo.state('discord_bot_health',{'healthy':False}),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
+    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_bot_token or cfg.discord_webhook_url),'discord_bot':repo.state('discord_bot_health',{'healthy':False}),'resume':repo.resume_info(),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
 async def manual_scan():
     if poll_lock.locked(): raise HTTPException(409,'scan already running')
     previous=repo.state('manual_scan',{}) or {}; now=datetime.now(timezone.utc)
@@ -179,8 +208,9 @@ async def prepare_application(job_id:int):
         job=s.get(Job,job_id)
         if not job: raise HTTPException(404,'job not found')
         # File generation is intentionally separate from sending; OAuth email sending remains opt-in.
-        letter=await revised_cover_letter(job)
-        path=write_package(job,letter=letter); eligible,reason=eligible_for_email(job,cfg.min_auto_application_score)
+        resume=repo.resume_record()
+        letter=await revised_cover_letter(job,repo.resume_text())
+        path=write_package(job,letter=letter,resume_bytes=resume['file_data'] if resume else None,resume_filename=resume['filename'] if resume else None); eligible,reason=eligible_for_email(job,cfg.min_auto_application_score)
         return {'path':str(path),'email_eligible':eligible,'reason':reason,'auto_send_enabled':cfg.auto_send_email_applications}
 def action_job(token:str):
     payload=ActionTokens(cfg).verify(token)
@@ -200,7 +230,8 @@ def action_page(token:str):
 async def action_post(token:str):
     payload,job=action_job(token); action=payload['a']
     if action=='generate':
-        letter=await revised_cover_letter(job); path=write_package(job,letter=letter)
+        resume=repo.resume_record()
+        letter=await revised_cover_letter(job,repo.resume_text()); path=write_package(job,letter=letter,resume_bytes=resume['file_data'] if resume else None,resume_filename=resume['filename'] if resume else None)
         return {'result':'cover letter generated','path':str(path)}
     if action in {'applied','saved','ignored'}:
         status={'applied':'APPLIED','saved':'SAVED','ignored':'IGNORED'}[action]

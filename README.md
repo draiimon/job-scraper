@@ -27,14 +27,21 @@ v!search <role>
 v!latest
 v!status
 v!scan
+v!resume
 v!help
 ```
 
-The persistent control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW STATUS`, and `HELP`. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`.
+The persistent control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW STATUS`, `HELP`, and `UPLOAD RESUME` when signed links are configured. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`.
 
 `APPLY NOW` opens an internal review flow. It can prepare a truthful cover letter and show the configured resume before an explicit send confirmation. Live sending is not implemented; dry-run mode is enabled by default. Only `VIEW JOB` and the employer's application URL open external pages.
 
 If the bot is not configured or temporarily unavailable, set `DISCORD_WEBHOOK_URL` for fallback notifications. Do not configure the webhook as a competing primary UI when the bot is healthy.
+
+## Resume-backed applications
+
+The active resume is stored in the database as one private record containing the PDF bytes, filename, upload time, and extracted text. Cover-letter drafts use that extracted text as their factual source, so the application flow can reference real experience and projects instead of an untracked local file. Gemini, when enabled, receives redacted resume context and is instructed not to add claims.
+
+Open `GET /resume` for the current resume status and a short-lived signed upload link. The link accepts PDF files up to 10 MB. Uploading a replacement updates the active record, clears cached cover letters, and includes the new PDF in newly generated application packages. Discord users can type `v!resume` or use `UPLOAD RESUME`.
 
 ## Local setup
 
@@ -51,6 +58,8 @@ Useful endpoints:
 
 - `GET /` — service landing page
 - `GET /health` — health and integration status
+- `GET /resume` — active resume status and signed upload link
+- `POST /resume/{token}` — replace the active PDF resume using a signed link
 - `GET /jobs` and `GET /latest` — stored qualifying jobs
 - `POST /find` — targeted Bright Data search when configured
 - `POST /control/scan/{token}` — signed manual scan link
@@ -89,7 +98,7 @@ Bright Data is disabled unless both `BRIGHTDATA_ENABLED=true` and `BRIGHTDATA_AP
 
 AI is disabled by default. When enabled for application review, Gemini only revises a deterministic draft, validates the response for common fabricated claims, and falls back to the deterministic letter on any failure or rate limit. It is not part of normal monitoring.
 
-`data/master-profile.json` is private, gitignored, and used for truthful profile/project tailoring. Mount it in production rather than committing it. Do not store contact details, credentials, OAuth material, or provider keys in source control.
+`data/master-profile.json` is private, gitignored, and remains an optional fallback for tailoring when no database resume is present. The database resume is the primary application context. Do not store contact details, credentials, OAuth material, or provider keys in source control.
 
 ## Render
 
@@ -104,7 +113,7 @@ Copy `.env.example` and provide only the integrations you intend to use. Importa
 - `DISCORD_WEBHOOK_URL` as fallback
 - `APP_SECRET_KEY` and `PUBLIC_BASE_URL` for signed internal action links
 - `POLLING_ENABLED` and `POLL_INTERVAL_SECONDS`
-- `PROFILE_PATH` and `RESUME_PATH` for private application materials
+- `PROFILE_PATH` for the optional JSON fallback profile; the active PDF resume is managed through `/resume` or `v!resume` (`RESUME_PATH` remains available for legacy Discord viewing)
 - Bright Data and Gemini variables when those optional features are enabled
 
 Never print or commit secrets. Run the full test suite before deploying:

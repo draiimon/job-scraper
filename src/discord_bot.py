@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, logging, time
+import asyncio, io, logging, time
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -22,7 +22,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         from .models import Job
         with repo.sessions() as s: job=s.get(Job,job_id)
         if not job: return None,None,None
-        letter,mode=await generated_letter(job,use_ai,regenerate)
+        letter,mode=await generated_letter(job,use_ai,regenerate,repo.resume_text())
         with repo.sessions() as s:
             stored=s.get(Job,job_id); stored.raw_metadata={**(stored.raw_metadata or {}),'cover_letter':letter,'cover_letter_mode':mode}; s.commit(); job=stored
         return job,letter,mode
@@ -37,7 +37,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         embed.add_field(name='𝐒𝐘𝐒𝐓𝐄𝐌 𝐒𝐓𝐀𝐓𝐔𝐒',value=f"Service\nONLINE\n\nScheduler\n{state.get('status','starting').upper()}\n\nLast scan\n{stamp(state.get('last_poll_at'))}\n\nNext scan\n{stamp(state.get('next_poll_at'))}",inline=True)
         embed.add_field(name='𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐈𝐎𝐍𝐒',value=f"Sources\n{state.get('sources_working',0)} active\n\nLinkedIn\n{state.get('linkedin_status')}\n\nJobStreet\n{state.get('jobstreet_status')}\n\nDatabase\nCONNECTED\n\nDiscord\nCONNECTED",inline=True)
         embed.add_field(name='𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆 𝐍𝐎𝐖' if scanning else '𝐒𝐂𝐀𝐍 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄',value='Checking recent active jobs…' if scanning else f"Jobs checked: {state.get('jobs_checked',0)}\nNew qualifying jobs: {state.get('new_recent_jobs',0)}\nAlerts sent: {state.get('alerts_sent',0)}",inline=False)
-        embed.add_field(name='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',value='Use **SEARCH JOBS** or type `v!search Junior DevOps`. Everything happens inside Discord.',inline=False)
+        embed.add_field(name='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',value='Use **SEARCH JOBS**, type `v!search Junior DevOps`, or type `v!resume` to replace the saved resume.',inline=False)
         embed.set_footer(text='After Hours Job Hunter • Made by masoncalix')
         return embed
     class ReviewView(discord.ui.View):
@@ -61,6 +61,10 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.response.defer(ephemeral=True,thinking=True); _,_,mode=await prepare_letter(self.job_id,False,True); await interaction.followup.send(f'Cover letter set to {mode}.',ephemeral=True)
         @discord.ui.button(label='VIEW RESUME',style=discord.ButtonStyle.secondary)
         async def resume(self,interaction,button):
+            stored=repo.resume_record()
+            if stored:
+                await interaction.response.send_message(file=discord.File(io.BytesIO(stored['file_data']),filename=stored['filename']),ephemeral=True)
+                return
             path=Path(cfg.resume_path) if cfg.resume_path else None
             if not path or not path.exists(): await interaction.response.send_message('Private resume file is not configured on the service.',ephemeral=True); return
             await interaction.response.send_message(file=discord.File(path,filename='Mark_Andrei_Castillo_Resume.pdf'),ephemeral=True)
@@ -97,7 +101,8 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             job,_,mode=await prepare_letter(self.job_id,True)
             if not job: await interaction.followup.send('This job is no longer available.',ephemeral=True); return
             embed=discord.Embed(title='𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖',description=f'**{job.title}**\n{job.company}',colour=0xF59E0B)
-            embed.add_field(name='Resume',value='READY' if cfg.resume_path and Path(cfg.resume_path).exists() else 'NOT CONFIGURED',inline=True)
+            stored_resume=repo.resume_info()
+            embed.add_field(name='Resume',value='READY' if stored_resume or (cfg.resume_path and Path(cfg.resume_path).exists()) else 'NOT CONFIGURED',inline=True)
             embed.add_field(name='Cover Letter',value=f'GENERATED WITH {mode}',inline=True)
             embed.add_field(name='Application Method',value='Email' if job.application_email else 'Employer portal',inline=False)
             await interaction.followup.send(embed=embed,view=ReviewView(self.job_id),ephemeral=True)
@@ -149,7 +154,11 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             except Exception: await interaction.followup.send('Search is temporarily unavailable.',ephemeral=True); return
             await send_jobs(interaction,jobs)
     class ControlView(discord.ui.View):
-        def __init__(self): super().__init__(timeout=None)
+        def __init__(self):
+            super().__init__(timeout=None)
+            if cfg.public_base_url:
+                token=ActionTokens(cfg).issue_control('resume')
+                if token: self.add_item(discord.ui.Button(label='UPLOAD RESUME',style=discord.ButtonStyle.link,url=f'{cfg.public_base_url.rstrip("/")}/resume/{token}'))
         @discord.ui.button(label='SCAN NOW',style=discord.ButtonStyle.primary,custom_id='jobhunter:scan')
         async def scan(self,interaction,button):
             if scan_task and not scan_task.done(): await interaction.response.send_message('A scan is already running.',ephemeral=True); return
@@ -240,6 +249,11 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         if command=='help':
             class Fake: pass
             await message.channel.send(embed=discord.Embed(title='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',description='`v!search <role>`\n`v!latest`\n`v!status`\n`v!scan`\n`v!help`',colour=0xF59E0B)); return
+        if command=='resume':
+            token=ActionTokens(cfg).issue_control('resume')
+            if not token or not cfg.public_base_url:
+                await message.channel.send('Resume upload is not configured. Set APP_SECRET_KEY and PUBLIC_BASE_URL first.'); return
+            await message.channel.send(f'Upload or replace the saved resume here: {cfg.public_base_url.rstrip("/")}/resume/{token}'); return
         if command=='search':
             if not argument: await message.channel.send('Usage: `v!search Junior DevOps`'); return
             if search_cooldowns.get(message.author.id,0)>time.time(): await message.channel.send('Please wait before searching again.'); return

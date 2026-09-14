@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
-from sqlalchemy import DateTime, Integer, String, Text, JSON, UniqueConstraint
+from sqlalchemy import DateTime, Integer, String, Text, JSON, LargeBinary, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def now() -> datetime: return datetime.now(timezone.utc)
@@ -54,3 +54,11 @@ class AppState(Base):
     __tablename__='app_state'
     key: Mapped[str] = mapped_column(String(100),primary_key=True)
     value: Mapped[str] = mapped_column(String(500),default='')
+class ResumeProfile(Base):
+    __tablename__='resume_profile'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    content_type: Mapped[str] = mapped_column(String(100), default='application/pdf')
+    file_data: Mapped[bytes] = mapped_column(LargeBinary)
+    extracted_text: Mapped[str] = mapped_column(Text)
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
