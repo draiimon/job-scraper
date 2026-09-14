@@ -60,10 +60,10 @@ class ManualJobSearch:
     @staticmethod
     def _query_terms(role: str) -> set[str]:
         raw = role.lower().replace("/", " ").replace("-", " ")
-        terms = {token for token in raw.split() if len(token) > 2}
+        terms = {token for token in raw.split() if len(token) > 2 and token not in {"engineer", "junior", "entry", "level"}}
         groups = {
-            "software": {"software", "developer", "development", "backend", "frontend", "fullstack", "full", "application", "engineer"},
-            "developer": {"developer", "software", "backend", "frontend", "fullstack", "full", "application", "engineer"},
+            "software": {"software", "developer", "development", "backend", "frontend", "fullstack", "full", "application"},
+            "developer": {"developer", "software", "backend", "frontend", "fullstack", "full", "application"},
             "devops": {"devops", "cloud", "platform", "infrastructure", "sre", "reliability"},
             "cloud": {"cloud", "devops", "platform", "infrastructure", "sre"},
             "support": {"support", "helpdesk", "service", "desktop", "technical", "noc", "operations"},
@@ -138,6 +138,8 @@ class ManualJobSearch:
                 return None
             title_terms = set(job.title.lower().replace("/", " ").replace("-", " ").split())
             related = len(title_terms & terms)
+            if not related:
+                return None
             return related, posted, job.score
 
         ranked = [(value, job) for job in candidates if (value := rank(job)) is not None]
@@ -178,7 +180,10 @@ class ManualJobSearch:
 
         # ATS sources are the reliable base and remain available without Bright Data.
         source_filter = source_filter.lower()
-        ats = [] if source_filter in ("linkedin", "brightdata_linkedin", "jobstreet") else configured_sources(self.cfg.source_targets)
+        # Manual searches are targeted and bounded. The 15-minute scheduler is
+        # responsible for the complete source set; a Discord query must not
+        # make the user wait through every configured board.
+        ats = [] if source_filter in ("linkedin", "brightdata_linkedin", "jobstreet") else configured_sources(self.cfg.source_targets)[:8]
         progress.sources_total = len(ats) + (1 if self.cfg.brightdata_enabled and self.cfg.brightdata_api_token and source_filter in ("all", "linkedin", "brightdata_linkedin") else 0)
         progress.live_attempted = bool(progress.sources_total)
         await self._emit(progress_callback, progress)

@@ -57,7 +57,21 @@ def test_zero_match_suggestions_use_recent_stored_tech_jobs_without_a_live_scan(
 
     suggested = ManualJobSearch(cfg, repo).suggested_recent_jobs("Software Engineer")
 
-    assert [job.title for job in suggested] == ["Junior Backend Developer", "Junior Cloud Engineer"]
+    assert [job.title for job in suggested] == ["Junior Backend Developer"]
+
+
+@pytest.mark.asyncio
+async def test_manual_search_limits_live_ats_sources_to_keep_discord_fast(tmp_path, monkeypatch):
+    class EmptySource:
+        def __init__(self, number): self.name = f"fixture:{number}"
+        async def fetch(self): return []
+
+    monkeypatch.setattr("src.manual_search.configured_sources", lambda _targets: [EmptySource(i) for i in range(12)])
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/bounded.db", brightdata_enabled=False)
+    repo = Repository(cfg.database_url); repo.create_schema()
+    outcome = await ManualJobSearch(cfg, repo).find_with_progress("software engineer")
+    assert outcome.progress.sources_total == 8
+    assert outcome.progress.sources_checked == 8
 
 
 def test_discord_gateway_lease_allows_only_one_owner_and_expires(tmp_path):

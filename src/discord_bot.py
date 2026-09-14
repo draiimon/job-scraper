@@ -367,7 +367,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 for job in jobs[:3]:
                     embed,view=card(job); await channel.send(embed=embed,view=view)
             else:
-                source_note='Live discovery was unavailable; cached data only was checked.' if not current.live_available else 'Try: Software Developer · Junior Developer · Backend Developer'
+                source_note='Live discovery was unavailable; cached data only was checked.' if not current.live_available else 'Try a related title or use fewer words in your search.'
                 suggestions=await asyncio.to_thread(manual_search.suggested_recent_jobs,role,3)
                 suggestion_note=(
                     f'Qualifying matches: 0\n\n{source_note}\n\n'
@@ -539,6 +539,8 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             if message_id in processed_messages: return
             processed_messages[message_id]=now
         command,_,argument=message.content[2:].strip().partition(' '); command=command.lower(); argument=argument.strip()
+        if command=='view' and argument.lower()=='all':
+            command='viewall'; argument=''
         if command=='help':
             embed=styled_embed('𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄','`v!search <role>`\n`v!latest`\n`v!viewall`\n`v!status`\n`v!scan`\n`v!help`'); await message.channel.send(embed=embed); return
         if command=='resume':
