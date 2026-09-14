@@ -62,6 +62,29 @@ class JobEvent(Base):
     event_type: Mapped[str] = mapped_column(String(64), index=True)
     detail: Mapped[str] = mapped_column(Text, default='')
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
+class SourceConnection(Base):
+    """Encrypted human-authorized source session; never stores credentials."""
+    __tablename__='source_connections'; __table_args__=(UniqueConstraint('discord_user_id','source', name='uq_source_connection_user'),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    discord_user_id: Mapped[str] = mapped_column(String(32), index=True)
+    source: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default='AUTH REQUIRED', index=True)
+    encrypted_session: Mapped[str | None] = mapped_column(Text, nullable=True)
+    connected_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+class SourceConnectionRequest(Base):
+    __tablename__='source_connection_requests'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    discord_user_id: Mapped[str] = mapped_column(String(32), index=True)
+    source: Mapped[str] = mapped_column(String(64), index=True)
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    nonce: Mapped[str] = mapped_column(String(64), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default='PENDING')
 class ResumeProfile(Base):
     __tablename__='resume_profile'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

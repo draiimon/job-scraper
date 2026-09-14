@@ -12,6 +12,7 @@ from urllib.parse import quote_plus, urlparse
 
 from .config import Settings
 from .jobs import NormalizedJob
+from .jobstreet_link import connection_status, restore_latest_session
 from .sources import Source, SourceError
 
 log = logging.getLogger(__name__)
@@ -71,6 +72,10 @@ def ensure_storage_state(cfg: Settings) -> bool:
 
 
 def _auth_state(cfg: Settings, repo=None) -> str:
+    if repo is not None and hasattr(repo, "sessions"):
+        linked = connection_status(cfg, repo)
+        if linked != "AUTH REQUIRED":
+            return linked
     if not ensure_storage_state(cfg):
         return "AUTH REQUIRED"
     if repo is None:
@@ -323,7 +328,11 @@ class JobStreetBrowserSource(Source):
         self.name = JOBSTREET_SOURCE_NAME
 
     async def fetch(self) -> list[NormalizedJob]:
-        if not ensure_storage_state(self.cfg):
+        runtime_state = session_path(self.cfg).with_name("jobstreet_runtime_session.json")
+        linked_state = False
+        if self.repo is not None and hasattr(self.repo, "sessions"):
+            linked_state = await asyncio.to_thread(restore_latest_session, self.cfg, self.repo, runtime_state)
+        if not linked_state and not ensure_storage_state(self.cfg):
             raise JobStreetAuthRequired("AUTH REQUIRED")
         try:
             from playwright.async_api import async_playwright
@@ -334,7 +343,7 @@ class JobStreetBrowserSource(Source):
         try:
             async with async_playwright() as playwright:
                 browser = await playwright.chromium.launch(headless=True)
-                context = await browser.new_context(storage_state=str(session_path(self.cfg)))
+                context = await browser.new_context(storage_state=str(runtime_state if linked_state else session_path(self.cfg)))
                 page = await context.new_page()
                 try:
                     for term in self.cfg.jobstreet_search_terms:
@@ -359,11 +368,19 @@ class JobStreetBrowserSource(Source):
         except JobStreetAuthRequired:
             await asyncio.to_thread(_mark_auth_state, self.cfg, self.repo, "AUTH REQUIRED")
             raise
+        finally:
+            if linked_state:
+                try:
+                    runtime_state.unlink(missing_ok=True)
+                except OSError:
+                    pass
         await asyncio.to_thread(_mark_auth_state, self.cfg, self.repo, "READY")
         return jobs
 
 
 def jobstreet_sources(cfg: Settings, repo=None) -> list[Source]:
+    if repo is not None and connection_status(cfg, repo) == "READY":
+        return [JobStreetBrowserSource(cfg, repo)]
     if not ensure_storage_state(cfg):
         return []
     return [JobStreetBrowserSource(cfg, repo)]

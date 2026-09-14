@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from .config import settings
 from .jobs import NormalizedJob
 from .models import Job, JobStatus, SourceRun, SourceHealth, JobEvent
+from .jobstreet_link import browserless_ready, request_for_token
 from .services import Pipeline, Repository
 from .sources import configured_sources
 from .applications import eligible_for_email, write_package, revised_cover_letter
@@ -118,6 +119,21 @@ def home():
 @app.get('/favicon.ico',include_in_schema=False)
 def favicon():
     return Response(status_code=204)
+
+@app.get('/connect/jobstreet/{token}', response_class=HTMLResponse)
+def jobstreet_connect_page(token: str):
+    request = request_for_token(repo, token)
+    if not request:
+        raise HTTPException(403, 'invalid, expired, or already-used connection link')
+    state = 'Ready to start a private browser session.' if browserless_ready(cfg) else 'Browserless is not configured yet. Ask the administrator to add the required private service secrets.'
+    return HTMLResponse(
+        '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Connect JobStreet</title><main style="max-width:42rem;margin:3rem auto;font:16px system-ui;color:#222">'
+        '<h1>Connect JobStreet</h1><p>Waiting for authentication.</p>'
+        '<p>You will sign in directly inside a temporary browser session. This service never asks for your Google password, 2FA code, or CAPTCHA response.</p>'
+        f'<p><strong>Status:</strong> {escape(state)}</p>'
+        '<p>This short-lived link is private. Do not share it.</p></main>'
+    )
 
 def resume_upload_link():
     token=ActionTokens(cfg).issue_control('resume')
