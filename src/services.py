@@ -163,7 +163,9 @@ class Discord:
             if not value: return '—'
             return datetime.fromisoformat(value).astimezone(ZoneInfo('Asia/Manila')).strftime('%I:%M %p')
         sources=scheduler_state.get('sources_working',0); linked=scheduler_state.get('linkedin_status','DISABLED'); jobstreet=scheduler_state.get('jobstreet_status','DISABLED')
-        payload={'embeds':[{'title':'𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑 𝐒𝐓𝐀𝐓𝐔𝐒','description':f"Service: ONLINE\nScheduler: {scheduler_state.get('status','RUNNING').upper()}\nLast scan: {stamp(scheduler_state.get('last_poll_at'))}\nNext scan: {stamp(scheduler_state.get('next_poll_at'))}\n\nSources: {sources} active\nJobs checked: {scheduler_state.get('jobs_checked',0)}\nNew recent jobs: {scheduler_state.get('new_recent_jobs',0)}\nAlerts sent: {scheduler_state.get('alerts_sent',0)}\nDatabase: CONNECTED\nLinkedIn: {linked}\nJobStreet: {jobstreet}"}]}
+        payload={'embeds':[{'title':'𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑 𝐒𝐓𝐀𝐓𝐔𝐒','description':f"Service: ONLINE\nScheduler: {scheduler_state.get('status','RUNNING').upper()}\nLast scan: {stamp(scheduler_state.get('last_poll_at'))}\nNext scan: {stamp(scheduler_state.get('next_poll_at'))}\n\nSources: {sources} active\nJobs checked: {scheduler_state.get('jobs_checked',0)}\nNew recent jobs: {scheduler_state.get('new_recent_jobs',0)}\nAlerts sent: {scheduler_state.get('alerts_sent',0)}\nDatabase: CONNECTED\nLinkedIn: {linked}\nJobStreet: {jobstreet}",'footer':{'text':'Made by masoncalix'}}]}
+        if self.cfg and self.cfg.public_base_url:
+            payload['components']=[{'type':1,'components':[{'type':2,'style':5,'label':'SCAN NOW','url':f'{self.cfg.public_base_url.rstrip("/")}/scan'},{'type':2,'style':5,'label':'SEARCH JOBS','url':f'{self.cfg.public_base_url.rstrip("/")}/search'}]}]
         existing=repo.state('discord_status_message_id')
         async with httpx.AsyncClient(timeout=15) as client:
             if existing:
@@ -173,6 +175,17 @@ class Discord:
             response=await client.post(self.url,params={'wait':'true'},json=payload); response.raise_for_status()
             message_id=response.json().get('id')
             if message_id: repo.set_state('discord_status_message_id',message_id)
+        return 'CREATED'
+    async def update_welcome(self, repo: Repository):
+        if not self.url: return 'SKIPPED'
+        payload={'embeds':[{'title':'𝐖𝐄𝐋𝐂𝐎𝐌𝐄 — 𝐀𝐅𝐓𝐄𝐑 𝐇𝐎𝐔𝐑𝐒 𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑','description':'Find recent entry-level PH tech jobs without alert spam.\n\n1. Use **SEARCH JOBS** for a specific role.\n2. Use **SCAN NOW** only when you need one immediate batch.\n3. Open **APPLY NOW** to review before applying.\n4. Save or skip jobs to keep your feed clean.','footer':{'text':'Made by masoncalix'}}]}
+        existing=repo.state('discord_welcome_message_id')
+        async with httpx.AsyncClient(timeout=15) as client:
+            if existing:
+                response=await client.patch(f'{self.url}/messages/{existing}',json=payload)
+                if response.status_code!=404: response.raise_for_status(); return 'UPDATED'
+            response=await client.post(self.url,params={'wait':'true'},json=payload); response.raise_for_status(); message_id=response.json().get('id')
+            if message_id: repo.set_state('discord_welcome_message_id',message_id)
         return 'CREATED'
 class Pipeline:
     def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0
