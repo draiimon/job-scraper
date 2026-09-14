@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.8-flash"
     gemini_max_retries: int = 3
     gemini_concurrency_limit: int = 2
+    brightdata_enabled: bool = False
+    brightdata_api_token: str | None = None
+    brightdata_linkedin_jobs_dataset_id: str | None = None
+    brightdata_jobstreet_dataset_id: str | None = None
+    brightdata_linkedin_jobs_inputs_json: str = '[]'
+    brightdata_jobstreet_inputs_json: str = '[]'
 
     @property
     def source_targets(self) -> list[dict]:
@@ -75,6 +81,12 @@ class Settings(BaseSettings):
             '𝐏𝐀𝐒𝐀 𝐊𝐀 𝐍𝐀 𝐍𝐆 𝐑𝐄𝐒𝐔𝐌𝐄. 𝐇𝐈𝐍𝐃𝐈 𝐈𝐓𝐎 𝐌𝐀𝐆-𝐀𝐀𝐏𝐏𝐋𝐘 𝐏𝐀𝐑𝐀 𝐒𝐀𝐘𝐎.',
             '𝐌𝐀𝐘 𝐁𝐀𝐆𝐎𝐍𝐆 𝐖𝐎𝐑𝐊. 𝐆𝐀𝐋𝐀𝐖-𝐆𝐀𝐋𝐀𝐖 𝐍𝐀.'
         ]
+    def brightdata_inputs(self, kind: str) -> list[dict]:
+        raw=self.brightdata_linkedin_jobs_inputs_json if kind=='linkedin_jobs' else self.brightdata_jobstreet_inputs_json
+        try:
+            data=json.loads(raw)
+            return data if isinstance(data,list) and all(isinstance(x,dict) for x in data) else []
+        except json.JSONDecodeError: return []
 
 @lru_cache
 def settings() -> Settings: return Settings()

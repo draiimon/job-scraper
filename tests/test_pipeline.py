@@ -11,6 +11,8 @@ from src.ai import GeminiManager, KeyState
 from src.security import ActionTokens
 from src.applications import valid_revision
 from src.main import home
+from src.brightdata import BrightDataClient, BrightDataJobs
+from src.sources import SourceError
 
 def job(**overrides):
     values=dict(source='test',source_job_id='one',title='Junior DevOps Engineer',company='Cloud PH',location='Taguig, Philippines — Hybrid',description='Fresh graduate AWS Docker Terraform Linux CI/CD Kubernetes.',url='https://example.com/one',date_posted=datetime.now(timezone.utc)-timedelta(hours=2))
@@ -97,6 +99,45 @@ def test_default_motivation_pool_is_available():
 
 def test_root_route_is_render_probe_friendly():
     assert home().status_code == 200
+
+@pytest.mark.asyncio
+async def test_brightdata_normalizes_and_caches_results():
+    class Client:
+        calls=0
+        async def scrape(self,*_):
+            self.calls+=1
+            return [{'id':'1','title':'Junior Cloud Engineer','company':'Cloud PH','location':'Makati, Philippines','description':'AWS Docker','url':'https://example.com/job','date_posted':'2026-09-14T00:00:00+00:00'}]
+    client=Client(); source=BrightDataJobs('linkedin_jobs','dataset',[{'keyword':'cloud'}],client)
+    jobs=await source.fetch()
+    assert jobs[0].source=='brightdata:linkedin_jobs' and jobs[0].title=='Junior Cloud Engineer'
+
+@pytest.mark.asyncio
+async def test_brightdata_auth_failure_does_not_retry(monkeypatch):
+    class Response:
+        status_code=401; headers={}; text='unauthorized'
+        @property
+        def is_success(self): return False
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self,*_): return None
+        async def post(self,*_,**__): return Response()
+    monkeypatch.setattr('src.brightdata.httpx.AsyncClient',lambda **_:Client())
+    with pytest.raises(SourceError,match='authentication'):
+        await BrightDataClient('token',retries=3).scrape('dataset',[{'q':'test'}])
+
+@pytest.mark.asyncio
+async def test_brightdata_429_respects_retry_cap(monkeypatch):
+    class Response:
+        status_code=429; headers={'Retry-After':'0'}; text='rate limited'
+        @property
+        def is_success(self): return False
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self,*_): return None
+        async def post(self,*_,**__): return Response()
+    monkeypatch.setattr('src.brightdata.httpx.AsyncClient',lambda **_:Client())
+    with pytest.raises(SourceError,match='temporarily'):
+        await BrightDataClient('token',retries=0).scrape('dataset',[{'q':'test'}])
 
 @pytest.mark.asyncio
 async def test_gemini_429_uses_pool_cooldown_and_cache():

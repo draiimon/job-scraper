@@ -14,12 +14,13 @@ from .sources import configured_sources
 from .applications import eligible_for_email, write_package, revised_cover_letter
 from .ai import gemini
 from .security import ActionTokens
+from .brightdata import brightdata_sources
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
 cfg=settings(); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
 async def worker():
     while True:
         pipeline.begin_cycle()
-        await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)))
+        await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg)))
         await pipeline.retry_notifications()
         await asyncio.sleep(cfg.poll_interval_seconds)
 @asynccontextmanager
@@ -40,7 +41,9 @@ def health():
         sources=s.scalars(select(SourceHealth)).all()
     return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_webhook_url),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
 @app.post('/run')
-async def run_once(): return await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)))
+async def run_once():
+    pipeline.begin_cycle()
+    return await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg)))
 @app.get('/jobs')
 def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
     with repo.sessions() as s:
