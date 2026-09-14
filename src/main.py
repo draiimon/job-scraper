@@ -20,7 +20,7 @@ cfg=settings(); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
 async def worker():
     while True:
         pipeline.begin_cycle()
-        await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg)))
+        await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo)))
         await pipeline.retry_notifications()
         await asyncio.sleep(cfg.poll_interval_seconds)
 @asynccontextmanager
@@ -43,7 +43,7 @@ def health():
 @app.post('/run')
 async def run_once():
     pipeline.begin_cycle()
-    return await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg)))
+    return await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo)))
 @app.get('/jobs')
 def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
     with repo.sessions() as s:

@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     brightdata_jobstreet_dataset_id: str | None = None
     brightdata_linkedin_jobs_inputs_json: str = '[]'
     brightdata_jobstreet_inputs_json: str = '[]'
+    # JobStreet is billed/limited by page load.  Keep this deliberately below
+    # the advertised free allowance unless the operator explicitly changes it.
+    brightdata_jobstreet_monthly_page_limit: int = 250
 
     @property
     def source_targets(self) -> list[dict]:

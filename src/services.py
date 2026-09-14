@@ -59,6 +59,25 @@ class Repository:
             count=int(state.value)
             if count>=limit: s.commit(); return False
             state.value=str(count+1); s.commit(); return True
+    def reserve_brightdata_page_loads(self, source: str, requested: int, limit: int) -> bool:
+        """Atomically reserve a monthly Bright Data page-load budget.
+
+        A rejected reservation happens before a paid/free-quota-consuming scrape
+        request.  Each source is isolated so record-based sources do not affect
+        JobStreet's page-load guard.
+        """
+        if requested < 1 or limit < 1:
+            return False
+        month=datetime.now(timezone.utc).strftime('%Y-%m')
+        key=f'brightdata_page_loads:{source}:{month}'
+        with self.sessions() as s:
+            state=s.get(AppState,key)
+            if not state:
+                state=AppState(key=key,value='0'); s.add(state)
+            used=int(state.value)
+            if used+requested > limit:
+                s.commit(); return False
+            state.value=str(used+requested); s.commit(); return True
     def expire_stale_jobs(self):
         cutoff=datetime.now(timezone.utc)-timedelta(days=30)
         with self.sessions() as s:

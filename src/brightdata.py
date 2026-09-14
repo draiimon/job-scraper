@@ -44,9 +44,13 @@ class BrightDataClient:
                 await asyncio.sleep(min(30,2**attempt+random.uniform(0,1)))
         raise SourceError('Bright Data request failed')
 class BrightDataJobs(Source):
-    def __init__(self,kind:str,dataset_id:str,inputs:list[dict],client:BrightDataClient):
-        self.kind=kind; self.name=f'brightdata:{kind}'; self.dataset_id=dataset_id; self.inputs=inputs; self.client=client
+    def __init__(self,kind:str,dataset_id:str,inputs:list[dict],client:BrightDataClient, repo=None, monthly_page_limit:int=0):
+        self.kind=kind; self.name=f'brightdata:{kind}'; self.dataset_id=dataset_id; self.inputs=inputs; self.client=client; self.repo=repo; self.monthly_page_limit=monthly_page_limit
     async def fetch(self):
+        # JobStreet's quota is page-load based, unlike the record-oriented
+        # LinkedIn dataset. Reserve conservatively before asking Bright Data.
+        if self.kind=='jobstreet' and self.repo and not self.repo.reserve_brightdata_page_loads('jobstreet',len(self.inputs),self.monthly_page_limit):
+            raise SourceError('Bright Data JobStreet monthly free safety limit reached')
         discovery={'type':'discover_new','discover_by':'keyword'} if self.kind=='linkedin_jobs' else None
         data=await self.client.scrape(self.dataset_id,self.inputs,extra_params=discovery)
         rows=data if isinstance(data,list) else data.get('data',data.get('results',[]))
@@ -60,10 +64,11 @@ class BrightDataJobs(Source):
         return ''
     def _normalize(self,row):
         return NormalizedJob(source=self.name,source_job_id=self._pick(row,'id','job_id'),title=self._pick(row,'title','job_title','position'),company=self._pick(row,'company','company_name','employer') or 'Unknown company',location=self._pick(row,'location','job_location'),description=self._pick(row,'description','job_description','snippet'),url=self._pick(row,'url','job_url','apply_url'),application_url=self._pick(row,'apply_url','application_url','url','job_url'),date_posted=parse_date(self._pick(row,'date_posted','posted_at','publication_date')),employment_type=self._pick(row,'employment_type','job_type') or None,raw_metadata={'provider':'brightdata','dataset_kind':self.kind})
-def brightdata_sources(cfg:Settings):
+def brightdata_sources(cfg:Settings, repo=None):
     if not cfg.brightdata_enabled or not cfg.brightdata_api_token: return []
     client=BrightDataClient(cfg.brightdata_api_token); result=[]
     for kind,dataset in (('linkedin_jobs',cfg.brightdata_linkedin_jobs_dataset_id),('jobstreet',cfg.brightdata_jobstreet_dataset_id)):
         inputs=cfg.brightdata_inputs(kind)
-        if dataset and inputs: result.append(BrightDataJobs(kind,dataset,inputs,client))
+        if dataset and inputs:
+            result.append(BrightDataJobs(kind,dataset,inputs,client,repo=repo,monthly_page_limit=cfg.brightdata_jobstreet_monthly_page_limit))
     return result

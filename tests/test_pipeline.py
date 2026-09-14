@@ -93,6 +93,13 @@ def test_global_baseline_alert_limit(tmp_path):
     repo=Repository(f'sqlite:///{tmp_path}/baseline.db'); repo.create_schema()
     assert [repo.reserve_baseline_alert() for _ in range(6)] == [True,True,True,True,True,False]
 
+def test_jobstreet_page_load_budget_is_separate_and_hard_capped(tmp_path):
+    repo=Repository(f'sqlite:///{tmp_path}/quota.db'); repo.create_schema()
+    assert repo.reserve_brightdata_page_loads('jobstreet',2,3)
+    assert not repo.reserve_brightdata_page_loads('jobstreet',2,3)
+    # A JobStreet page-load stop must not consume or block another source.
+    assert repo.reserve_brightdata_page_loads('linkedin_jobs',3,3)
+
 def test_default_motivation_pool_is_available():
     cfg=Settings(discord_motivation='',discord_motivations_json='')
     assert len(cfg.discord_motivations) == 5
@@ -110,6 +117,21 @@ async def test_brightdata_normalizes_and_caches_results():
     client=Client(); source=BrightDataJobs('linkedin_jobs','dataset',[{'keyword':'cloud'}],client)
     jobs=await source.fetch()
     assert jobs[0].source=='brightdata:linkedin_jobs' and jobs[0].title=='Junior Cloud Engineer'
+
+@pytest.mark.asyncio
+async def test_jobstreet_does_not_call_brightdata_after_monthly_cap(tmp_path):
+    class Client:
+        called=False
+        async def scrape(self,*_,**__):
+            self.called=True
+            return []
+    repo=Repository(f'sqlite:///{tmp_path}/jobstreet.db'); repo.create_schema()
+    client=Client()
+    source=BrightDataJobs('jobstreet','dataset',[{'url':'https://www.jobstreet.com.ph/jobs'}],client,repo,monthly_page_limit=1)
+    assert await source.fetch() == []
+    with pytest.raises(SourceError,match='free safety limit'):
+        await source.fetch()
+    assert client.called
 
 @pytest.mark.asyncio
 async def test_brightdata_auth_failure_does_not_retry(monkeypatch):
