@@ -7,7 +7,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import dotenv_values
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # Render/Replit may expose optional settings as empty environment
+    # variables.  Empty values must behave like unset values so defaults such
+    # as the 15-minute scheduler interval remain active.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_ignore_empty=True)
     database_url: str = "sqlite:///./data/job_agent.sqlite3"
     discord_webhook_url: str | None = None
     discord_bot_token: str | None = None
@@ -60,11 +63,23 @@ class Settings(BaseSettings):
 
     @property
     def source_targets(self) -> list[dict]:
-        if self.source_targets_json.strip():
-            try: return json.loads(self.source_targets_json)
-            except json.JSONDecodeError: return []
-        try: return json.loads(Path(self.source_config_path).read_text(encoding='utf-8'))
-        except (OSError, json.JSONDecodeError): return []
+        raw=self.source_targets_json.strip()
+        source_name='SOURCE_TARGETS_JSON'
+        if not raw:
+            source_name=self.source_config_path
+            try:
+                raw=Path(self.source_config_path).read_text(encoding='utf-8')
+            except OSError as exc:
+                raise ValueError(f'Unable to read source configuration: {self.source_config_path}') from exc
+        try:
+            parsed=json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f'{source_name} must contain a JSON array') from exc
+        if not isinstance(parsed,list) or not parsed:
+            raise ValueError(f'{source_name} must contain at least one source target')
+        if not all(isinstance(target,dict) for target in parsed):
+            raise ValueError(f'{source_name} must contain only JSON objects')
+        return parsed
     @property
     def gemini_keys(self) -> list[tuple[str,str]]:
         values={**dotenv_values('.env'), **os.environ}; keys=[]

@@ -14,7 +14,10 @@ from src.main import home
 from src.brightdata import BrightDataClient, BrightDataJobs
 from src.sources import SourceError
 from src.manual_search import ManualJobSearch
-from src.main import search_page
+from src.main import search_page, status_page, latest_page
+import src.main as main_module
+from fastapi import HTTPException
+from src.sources import configured_sources
 from src.resumes import extract_resume_text
 
 def job(**overrides):
@@ -175,9 +178,61 @@ async def test_manual_find_keeps_only_recent_ph_tech_jobs(tmp_path):
     found=await search.find('IT Support')
     assert len(found)==1 and found[0].source_job_id=='fresh'
 
-def test_webhook_only_search_page_has_no_bot_dependency():
-    page=search_page().body.decode()
-    assert '/find' in page and '/search/discord' in page and 'DISCORD_BOT_TOKEN' not in page
+def test_web_job_hunt_pages_are_disabled_for_discord_only_flow():
+    for page in (search_page,status_page,latest_page):
+        with pytest.raises(HTTPException) as error:
+            page()
+        assert error.value.status_code == 410
+
+def test_source_json_fallback_loads_all_configured_targets(tmp_path):
+    cfg=Settings(source_targets_json='',source_config_path='config/job_sources.json')
+    sources=configured_sources(cfg.source_targets)
+    assert len(sources) == 6
+    assert {source.name for source in sources} == {
+        'greenhouse:GitLab','greenhouse:Cloudflare','greenhouse:Wise',
+        'ashby:Notion','ashby:PostHog','ashby:Linear',
+    }
+
+def test_source_json_errors_are_not_silently_treated_as_empty(tmp_path):
+    path=tmp_path/'broken.json'
+    path.write_text('{broken',encoding='utf-8')
+    with pytest.raises(ValueError,match='JSON array'):
+        Settings(source_targets_json='',source_config_path=str(path)).source_targets
+
+def test_empty_environment_values_keep_scheduler_defaults(monkeypatch):
+    monkeypatch.setenv('POLL_INTERVAL_SECONDS','')
+    monkeypatch.setenv('POLLING_ENABLED','')
+    monkeypatch.setenv('MIN_NOTIFY_SCORE','')
+    cfg=Settings()
+    assert cfg.polling_enabled is True and cfg.poll_interval_seconds == 900 and cfg.min_notify_score == 70
+
+@pytest.mark.asyncio
+async def test_manual_scan_preserves_automatic_next_poll(tmp_path,monkeypatch):
+    repo=Repository(f'sqlite:///{tmp_path}/manual-scheduler.db'); repo.create_schema()
+    scheduled=(datetime.now(timezone.utc)+timedelta(minutes=10)).isoformat()
+    repo.set_state('scheduler',{'status':'running','phase':'complete','last_poll_at':datetime.now(timezone.utc).isoformat(),'next_poll_at':scheduled})
+    cfg=Settings(database_url=f'sqlite:///{tmp_path}/manual-scheduler.db',poll_interval_seconds=900,discord_bot_token=None,discord_webhook_url=None)
+
+    class FakeSource:
+        name='fixture'
+    class FakeDiscord:
+        async def update_status(self,*_): return 'SKIPPED'
+    class FakePipeline:
+        _cycle_notifications=0
+        discord=FakeDiscord()
+        def begin_cycle(self): pass
+        async def run_source(self,_): return {'source':'fixture','discovered':0,'new':0,'filtered':0}
+        async def retry_notifications(self): return 0
+
+    monkeypatch.setattr(main_module,'repo',repo)
+    monkeypatch.setattr(main_module,'cfg',cfg)
+    monkeypatch.setattr(main_module,'pipeline',FakePipeline())
+    monkeypatch.setattr(main_module,'configured_sources',lambda _: [FakeSource()])
+    monkeypatch.setattr(main_module,'brightdata_sources',lambda *_: [])
+    await main_module.poll_once(manual=True)
+    state=repo.state('scheduler')
+    assert state['next_poll_at']==scheduled
+    assert state['last_poll_at'] != scheduled
 
 def test_default_motivation_pool_is_available():
     cfg=Settings(discord_motivation='',discord_motivations_json='')

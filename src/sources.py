@@ -40,8 +40,20 @@ def parse_date(value):
 def configured_sources(targets):
     factories={'greenhouse':Greenhouse,'lever':Lever,'ashby':Ashby}; result=[]
     for t in targets:
-        if t.get('kind') in factories:
-            try: result.append(factories[t['kind']](t))
-            except KeyError: log.warning('invalid_source_target',extra={'target':t})
-    if not result: log.warning('no_public_ats_sources_configured')
+        if not isinstance(t,dict):
+            raise ValueError('source target must be a JSON object')
+        kind=t.get('kind')
+        if kind not in factories:
+            raise ValueError(f'unsupported source kind: {kind!r}')
+        if not t.get('name'):
+            raise ValueError(f'{kind} source is missing name')
+        if kind=='greenhouse' and not t.get('token'):
+            raise ValueError(f'greenhouse source {t["name"]!r} is missing token')
+        if kind=='lever' and not (t.get('token') or t.get('site')):
+            raise ValueError(f'lever source {t["name"]!r} is missing token/site')
+        if kind=='ashby' and not (t.get('token') or t.get('board')):
+            raise ValueError(f'ashby source {t["name"]!r} is missing token/board')
+        result.append(factories[kind](t))
+    if not result:
+        raise ValueError('no public ATS sources configured')
     return result

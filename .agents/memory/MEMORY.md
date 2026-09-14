@@ -1,0 +1,3 @@
+- [Resume application context](resume-application-context.md) — the active resume is the source of truth; replacements invalidate derived letters.
+- [Cover letter tone](cover-letter-tone.md) — keep generated letters neutral across role levels; never hard-code entry-level assumptions.
+- [Scheduler and source configuration](scheduler-source-config.md) — empty deployment env values must preserve defaults; manual scans must not move the automatic deadline.

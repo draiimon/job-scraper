@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, logging
+import asyncio, json, logging
 from datetime import datetime, timedelta, timezone
 from html import escape
 from contextlib import asynccontextmanager
@@ -35,14 +35,24 @@ def scheduler_snapshot():
         except ValueError: pass
         saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
     return saved
-async def poll_once():
+async def poll_once(manual=False):
     async with poll_lock:
         started=datetime.now(timezone.utc)
-        repo.set_state('scheduler',{'status':'running','phase':'scanning','last_poll_at':iso(started),'next_poll_at':iso(started+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0})
+        previous=repo.state('scheduler',{}) or {}
+        scheduled_next=previous.get('next_poll_at') if manual else None
+        if not scheduled_next: scheduled_next=iso(started+timedelta(seconds=cfg.poll_interval_seconds))
+        repo.set_state('scheduler',{'status':'running','phase':'scanning','last_poll_at':iso(started),'next_poll_at':scheduled_next,'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0})
         if not cfg.discord_bot_token:
             try: await pipeline.discord.update_status(repo,scheduler_snapshot())
             except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
-        pipeline.begin_cycle(); sources=configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo); semaphore=asyncio.Semaphore(cfg.scan_source_concurrency)
+        try:
+            pipeline.begin_cycle(); public_sources=configured_sources(cfg.source_targets); sources=public_sources+brightdata_sources(cfg,repo)
+        except (OSError, ValueError, json.JSONDecodeError) as exc:
+            finished=datetime.now(timezone.utc)
+            repo.set_state('scheduler',{'status':'error','phase':'complete','last_poll_at':iso(finished),'next_poll_at':scheduled_next if manual else iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0,'sources_loaded':0,'source_config_error':str(exc)})
+            logging.error('source_configuration_failed: %s',exc)
+            return []
+        semaphore=asyncio.Semaphore(cfg.scan_source_concurrency)
         async def limited(source):
             async with semaphore:
                 try: return await asyncio.wait_for(pipeline.run_source(source),timeout=cfg.scan_source_timeout_seconds)
@@ -53,7 +63,7 @@ async def poll_once():
         await pipeline.retry_notifications()
         finished=datetime.now(timezone.utc)
         checked=sum(x['discovered'] for x in outcomes); new=sum(x['new'] for x in outcomes); filtered=sum(x['filtered'] for x in outcomes)
-        state={'status':'running','phase':'complete','last_poll_at':iso(finished),'next_poll_at':iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':pipeline._cycle_notifications,'duplicates_ignored':max(0,checked-new-filtered)}
+        state={'status':'running','phase':'complete','last_poll_at':iso(finished),'next_poll_at':scheduled_next if manual else iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':pipeline._cycle_notifications,'duplicates_ignored':max(0,checked-new-filtered),'sources_loaded':len(public_sources)}
         # status update is best-effort: a webhook outage never stops polling.
         state.update({'sources_working':sum(1 for source in sources if repo.health(source.name).status=='healthy'),'linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
         repo.set_state('scheduler',state)
@@ -63,8 +73,18 @@ async def poll_once():
         return outcomes
 async def worker():
     while True:
-        await poll_once()
-        await asyncio.sleep(cfg.poll_interval_seconds)
+        try:
+            await poll_once()
+        except Exception:
+            # A failed cycle must not kill the long-lived 15-minute scheduler.
+            logging.exception('automatic_poll_failed')
+        state=repo.state('scheduler',{}) or {}
+        next_poll=state.get('next_poll_at')
+        try:
+            delay=max(0,(datetime.fromisoformat(next_poll)-datetime.now(timezone.utc)).total_seconds()) if next_poll else cfg.poll_interval_seconds
+        except (TypeError, ValueError):
+            delay=cfg.poll_interval_seconds
+        await asyncio.sleep(delay)
 @asynccontextmanager
 async def lifespan(app):
     repo.create_schema(); repo.expire_stale_jobs()
@@ -83,7 +103,7 @@ async def lifespan(app):
 app=FastAPI(title='After Hours Job Hunter',lifespan=lifespan)
 @app.api_route('/',methods=['GET','HEAD'],include_in_schema=False,response_class=HTMLResponse)
 def home():
-    return HTMLResponse('''<!doctype html><html><head><title>After Hours Job Hunter</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#111827;color:#f8fafc;font:16px system-ui,sans-serif}main{max-width:760px;margin:10vh auto;padding:32px}h1{color:#f59e0b;font-size:clamp(2rem,5vw,3.5rem);margin:0 0 12px}p{color:#cbd5e1;line-height:1.6}nav{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}a{color:#111827;background:#f59e0b;border-radius:8px;padding:11px 16px;text-decoration:none;font-weight:700}a.secondary{background:#374151;color:#f8fafc}</style></head><body><main><p>AFTER HOURS JOB HUNTER</p><h1>Philippine tech jobs, found while you sleep.</h1><p>Automated monitoring for recent entry-level and junior technology roles in the Philippines and Remote PH. Discord is the primary control center.</p><nav><a href="/search">Search jobs</a><a href="/latest-page">Latest matches</a><a class="secondary" href="/resume">Manage resume</a><a class="secondary" href="/status">System status</a><a class="secondary" href="/docs">API docs</a></nav></main></body></html>''')
+    return HTMLResponse('''<!doctype html><html><head><title>After Hours Job Hunter</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><main><h1>After Hours Job Hunter</h1><p>Job hunting is managed in Discord. Use <code>v!search</code>, <code>v!latest</code>, <code>v!status</code>, <code>v!scan</code>, or <code>v!help</code>.</p></main></body></html>''')
 
 @app.get('/favicon.ico',include_in_schema=False)
 def favicon():
@@ -132,27 +152,22 @@ async def manual_scan():
         remaining=cfg.manual_scan_cooldown_seconds-int((now-then).total_seconds())
         if remaining>0: raise HTTPException(429,f'scan cooldown: try again in {remaining} seconds')
     repo.set_state('manual_scan',{'at':iso(now)})
-    return await poll_once()
+    return await poll_once(manual=True)
 @app.get('/control/scan/{token}',response_class=HTMLResponse)
 def scan_confirmation(token:str):
-    if not ActionTokens(cfg).verify_control(token,'scan'): raise HTTPException(403,'invalid or expired scan link')
-    return HTMLResponse(f'''<!doctype html><title>Start scan</title><h1>Start one job scan</h1><p>This performs one immediate batch. Automatic scans continue normally.</p><button id="scan">START SCAN</button><p id="result"></p><script>document.getElementById('scan').onclick=async()=>{{let r=await fetch('/control/scan/{token}',{{method:'POST'}}),d=await r.json();document.getElementById('result').textContent=r.ok?'Scan complete.':(d.detail||'Scan unavailable.')}};</script>''')
+    raise HTTPException(410,'Manual scans are available in Discord with v!scan')
 @app.post('/control/scan/{token}')
 async def scan_now(token:str):
-    if not ActionTokens(cfg).verify_control(token,'scan'): raise HTTPException(403,'invalid or expired scan link')
-    return await manual_scan()
+    raise HTTPException(410,'Manual scans are available in Discord with v!scan')
 @app.get('/status',response_class=HTMLResponse)
 def status_page():
-    state=scheduler_snapshot()
-    return HTMLResponse(f'<h1>Job Hunter Status</h1><pre>{escape(str(state))}</pre><p><a href="/search">Search jobs</a></p>')
+    raise HTTPException(410,'Status is available in Discord with v!status')
 @app.get('/latest-page',response_class=HTMLResponse)
 def latest_page():
-    with repo.sessions() as s: rows=s.scalars(select(Job).where(Job.status!=JobStatus.EXPIRED.value,Job.score>=cfg.min_notify_score).order_by(Job.date_posted.desc()).limit(20)).all()
-    cards=''.join(f'<article><h2>{escape(x.title)}</h2><p>{escape(x.company)} · {escape(x.location)} · {x.score}% match</p><p><a href="{escape(x.url,quote=True)}">View job</a></p></article>' for x in rows)
-    return HTMLResponse(f'<h1>Latest qualifying jobs</h1>{cards or "<p>No recent qualifying jobs yet.</p>"}')
+    raise HTTPException(410,'Latest jobs are available in Discord with v!latest')
 @app.get('/help',response_class=HTMLResponse)
 def help_page():
-    return HTMLResponse('''<h1>How to use After Hours Job Hunter</h1><h2>Auto scanning</h2><p>Runs every 15 minutes for recent PH entry-level tech roles.</p><h2>Scan now</h2><p>Runs one protected immediate scan and has a cooldown.</p><h2>Search jobs</h2><p>Find a specific role with freshness and location filters.</p><h2>Apply, Save, Skip</h2><p>Apply opens review, Save keeps a job for later, and Skip stops future alerts.</p>''')
+    raise HTTPException(410,'Help is available in Discord with v!help')
 @app.get('/jobs')
 def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
     with repo.sessions() as s:
@@ -173,25 +188,14 @@ class FindRequest(BaseModel):
     source_filter: str = 'all'
 @app.post('/find')
 async def find_jobs(request: FindRequest):
-    try:
-        result=await manual_search.find(request.role,request.location,request.freshness,request.remote,request.limit,request.work_setup,request.min_score,request.entry_level_only,request.source_filter)
-        return {'count':len(result),'jobs':result}
-    except Exception as exc:
-        raise HTTPException(503,detail='manual search unavailable; existing sources remain active') from exc
+    raise HTTPException(410,'Search is available in Discord with v!search')
 @app.get('/search',response_class=HTMLResponse)
 def search_page():
-    return HTMLResponse('''<!doctype html><html><head><title>Search latest jobs</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><h1>Search latest jobs</h1><p id="schedule">Loading scheduler status…</p><form id="search"><label>Job title / keyword <input name="role" required placeholder="Junior DevOps"></label><br><label>Location <select name="location"><option>Philippines</option><option>Remote Philippines</option><option>Manila</option></select></label><br><label>Freshness <select name="freshness"><option>Past 24 hours</option><option>Past 3 days</option><option>Past 7 days</option><option>Past 14 days</option></select></label><br><label>Work setup <select name="work_setup"><option value="">Any</option><option>Remote</option><option>Hybrid</option><option>On-site</option></select></label><br><label>Minimum match score <input name="min_score" value="0" min="0" max="100" type="number"></label><br><label>Entry-level only <input name="entry_level_only" checked type="checkbox"></label><br><label>Source <select name="source_filter"><option value="all">All available (LinkedIn)</option><option value="linkedin">LinkedIn</option></select></label><br><label>Result limit <input name="limit" value="10" min="1" max="10" type="number"></label><br><button>SEARCH</button></form><button id="send" hidden>SEND RESULTS TO DISCORD</button><main id="results"></main><script>let last=[],seconds=0;const out=document.getElementById('results'),schedule=document.getElementById('schedule');function show(j){let a=document.createElement('article'),h=document.createElement('h2'),p=document.createElement('p'),d=document.createElement('p'),l=document.createElement('a');h.textContent=j.title;p.textContent=j.company+' · '+j.location;d.textContent='Posted: '+(j.date_posted||'unavailable')+' · '+j.score+'% match';l.textContent='VIEW JOB';l.href=j.url;l.target='_blank';l.rel='noreferrer';a.append(h,p,d,l);out.append(a)}function clock(){if(seconds<=0){schedule.textContent='Scanning for new jobs…';setTimeout(loadStatus,3000);return}let m=Math.floor(seconds/60),s=String(seconds%60).padStart(2,'0');schedule.textContent='Next automatic scan in: '+m+':'+s;seconds--}async function loadStatus(){try{let d=await (await fetch('/health')).json();seconds=d.scheduler.seconds_until_next_poll||0;clock()}catch{schedule.textContent='Scheduler status unavailable'}}setInterval(clock,1000);loadStatus();document.getElementById('search').onsubmit=async e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));f.limit=+f.limit;f.min_score=+f.min_score;f.entry_level_only=!!f.entry_level_only;let r=await fetch('/find',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});let d=await r.json();last=d.jobs||[];out.replaceChildren();if(last.length)last.forEach(show);else out.textContent='No recent qualifying jobs found.';document.getElementById('send').hidden=!last.length};document.getElementById('send').onclick=async()=>{let r=await fetch('/search/discord',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobs:last.map(j=>j.id)})});alert(r.ok?'Results sent to Discord.':'Could not send results.')};</script></body></html>''')
+    raise HTTPException(410,'Search is available in Discord with v!search')
 class DiscordSearchResults(BaseModel): jobs: list[int]
 @app.post('/search/discord')
 async def send_search_results(request: DiscordSearchResults):
-    ids=list(dict.fromkeys(request.jobs))[:10]
-    with repo.sessions() as s: jobs_found=[s.get(Job,job_id) for job_id in ids]
-    sent=0
-    for job in (x for x in jobs_found if x):
-        try:
-            if await pipeline.discord.send_payload(pipeline.discord.payload(job)): sent+=1
-        except Exception as exc: logging.warning('manual_search_discord_failed',extra={'job_id':job.id,'error':str(exc)})
-    return {'sent':sent}
+    raise HTTPException(410,'Discord search results are delivered by v!search')
 @app.get('/latest')
 def latest_jobs(limit:int=10):
     with repo.sessions() as s:
