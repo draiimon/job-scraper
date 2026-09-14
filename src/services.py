@@ -109,7 +109,9 @@ class Repository:
             else: s.add(AppState(key=key,value=encoded))
             s.commit()
 class Discord:
-    def __init__(self,url:str|None, motivations:list[str]|str='', cfg:Settings|None=None): self.url=url; self.motivations=motivations if isinstance(motivations,list) else [motivations]; self.cfg=cfg
+    def __init__(self,url:str|None, motivations:list[str]|str='', cfg:Settings|None=None):
+        configured=motivations if isinstance(motivations,list) else [motivations]
+        self.url=url; self.motivations=[x for x in configured if x] or ['']; self.cfg=cfg
     def _link(self,job,action):
         if not self.cfg or not self.cfg.public_base_url: return None
         token=ActionTokens(self.cfg).issue(job.id,action)

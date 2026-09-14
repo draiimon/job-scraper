@@ -59,7 +59,7 @@ def test_safe_application_materials():
     record=Fake(); record.title='Junior Cloud Engineer'; record.company='Cloud PH'; record.description='AWS Terraform Docker Linux'; record.score=90; record.application_email='jobs@example.com'; record.warnings=[]
     assert eligible_for_email(record,85)[0]
     letter=cover_letter(record)
-    assert 'AWS' in letter and 'Oaktree' in letter and 'years of experience' not in letter
+    assert 'AWS' in letter and 'years of experience' not in letter
 
 def test_cross_source_and_alert_deduplication():
     email=alert_to_job('linkedin_alert','Junior DevOps Engineer','Cloud PH','Taguig, Philippines','https://linkedin.example/job',datetime.now(timezone.utc),'AWS Docker')

@@ -34,7 +34,11 @@ def is_ph_location(job: NormalizedJob) -> bool:
 def freshness(job: NormalizedJob, now: datetime | None=None) -> tuple[int,str|None,bool]:
     """Return score adjustment, human note, and whether an active listing may alert."""
     if not job.date_posted: return -20,'Posted date unavailable',False
-    age=max(0,(now or datetime.now(timezone.utc)-job.date_posted).total_seconds()/86400)
+    reference=now or datetime.now(timezone.utc)
+    posted=job.date_posted
+    if reference.tzinfo is None: reference=reference.replace(tzinfo=timezone.utc)
+    if posted.tzinfo is None: posted=posted.replace(tzinfo=timezone.utc)
+    age=max(0,(reference-posted).total_seconds()/86400)
     if age<=3: return 15,'Posted within 3 days',True
     if age<=7: return 8,'Posted within 7 days',True
     if age<=14: return -5,'Posted 8–14 days ago',True

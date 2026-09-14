@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from html import escape
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from .config import settings
@@ -32,7 +32,7 @@ def scheduler_snapshot():
     if next_poll:
         try: seconds=max(0,int((datetime.fromisoformat(next_poll)-datetime.now(timezone.utc)).total_seconds()))
         except ValueError: pass
-    saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_api_token else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
+        saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
     return saved
 async def poll_once():
     async with poll_lock:
@@ -54,7 +54,7 @@ async def poll_once():
         checked=sum(x['discovered'] for x in outcomes); new=sum(x['new'] for x in outcomes); filtered=sum(x['filtered'] for x in outcomes)
         state={'status':'running','phase':'complete','last_poll_at':iso(finished),'next_poll_at':iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':pipeline._cycle_notifications,'duplicates_ignored':max(0,checked-new-filtered)}
         # status update is best-effort: a webhook outage never stops polling.
-        state.update({'sources_working':0,'linkedin_status':'READY' if cfg.brightdata_api_token else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
+        state.update({'sources_working':sum(1 for source in sources if repo.health(source.name).status=='healthy'),'linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
         repo.set_state('scheduler',state)
         if not cfg.discord_bot_token:
             try: await pipeline.discord.update_status(repo,scheduler_snapshot())
@@ -82,7 +82,11 @@ async def lifespan(app):
 app=FastAPI(title='Philippine Job Agent',lifespan=lifespan)
 @app.api_route('/',methods=['GET','HEAD'],include_in_schema=False,response_class=HTMLResponse)
 def home():
-    return HTMLResponse('''<!doctype html><html><head><title>Philippine Job Agent</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><h1>Philippine Job Agent</h1><p>Service is running.</p><ul><li><a href="/health">Health</a></li><li><a href="/docs">API documentation</a></li><li><a href="/jobs?min_score=60">Qualifying jobs</a></li></ul></body></html>''')
+    return HTMLResponse('''<!doctype html><html><head><title>After Hours Job Hunter</title><meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0;background:#111827;color:#f8fafc;font:16px system-ui,sans-serif}main{max-width:760px;margin:10vh auto;padding:32px}h1{color:#f59e0b;font-size:clamp(2rem,5vw,3.5rem);margin:0 0 12px}p{color:#cbd5e1;line-height:1.6}nav{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}a{color:#111827;background:#f59e0b;border-radius:8px;padding:11px 16px;text-decoration:none;font-weight:700}a.secondary{background:#374151;color:#f8fafc}</style></head><body><main><p>AFTER HOURS JOB HUNTER</p><h1>Philippine tech jobs, found while you sleep.</h1><p>Automated monitoring for recent entry-level and junior technology roles in the Philippines and Remote PH. Discord is the primary control center.</p><nav><a href="/search">Search jobs</a><a href="/latest-page">Latest matches</a><a class="secondary" href="/status">System status</a><a class="secondary" href="/docs">API docs</a></nav></main></body></html>''')
+
+@app.get('/favicon.ico',include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
 @app.get('/health')
 def health():
     try:
@@ -90,7 +94,7 @@ def health():
     except Exception as e: raise HTTPException(503,detail='database unavailable') from e
     with repo.sessions() as s:
         sources=s.scalars(select(SourceHealth)).all()
-    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_webhook_url),'discord_bot':repo.state('discord_bot_health',{'healthy':False}),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
+    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_bot_token or cfg.discord_webhook_url),'discord_bot':repo.state('discord_bot_health',{'healthy':False}),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
 async def manual_scan():
     if poll_lock.locked(): raise HTTPException(409,'scan already running')
     previous=repo.state('manual_scan',{}) or {}; now=datetime.now(timezone.utc)

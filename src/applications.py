@@ -1,9 +1,9 @@
 from __future__ import annotations
 import re
 import json
-import re
 from pathlib import Path
 from .models import Job
+from .jobs import SKILLS
 from .profile import relevant_facts
 from .ai import gemini
 
@@ -13,13 +13,21 @@ def eligible_for_email(job: Job, minimum: int) -> tuple[bool,str]:
     if job.warnings: return False,'Posting has seniority or experience warnings'
     return True,'Eligible: published destination, high score, no red flags'
 def cover_letter(job: Job) -> str:
-    skills,projects=relevant_facts(job.title+' '+job.description)
+    text=(job.title+' '+job.description).lower()
+    skills,projects=relevant_facts(text)
+    detected=[skill.upper() if skill != 'ci/cd' else 'CI/CD' for skill in SKILLS if skill in text]
+    if skills:
+        skills_sentence=f"My relevant skills include {', '.join(skills)}."
+    elif detected:
+        skills_sentence=f"The role highlights technologies such as {', '.join(detected)}; my application is based on hands-on project work."
+    else:
+        skills_sentence='My application is based on hands-on project work with cloud infrastructure, Docker, Terraform, Linux, and CI/CD.'
     project_text='; '.join(f"{x['name']}: {x['description']}" for x in projects[:2])
     return f'''Dear Hiring Team,
 
 I am applying for the {job.title} role at {job.company}. I am interested in building and supporting reliable cloud and infrastructure systems, and this entry-level opportunity aligns with my hands-on project work.
 
-My relevant skills include {', '.join(skills) if skills else 'cloud infrastructure, Docker, Terraform, Linux, and CI/CD'}. {('Relevant work includes '+project_text+'.') if project_text else ''}
+{skills_sentence} {('Relevant work includes '+project_text+'.') if project_text else ''}
 
 I would welcome the opportunity to discuss how my practical learning and project experience can support your team. Thank you for your consideration.
 

@@ -88,6 +88,7 @@ class Settings(BaseSettings):
             configured=json.loads(self.discord_motivations_json)
             if isinstance(configured,list) and all(isinstance(x,str) and x.strip() for x in configured): return configured
         except json.JSONDecodeError: pass
+        if self.discord_motivation.strip(): return [self.discord_motivation.strip()]
         return [
             '𝐏𝐔𝐓𝐀𝐍𝐆 𝐈𝐍𝐀 𝐌𝐎! 𝐌𝐀𝐆-𝐀𝐏𝐏𝐋𝐘 𝐊𝐀 𝐍𝐀 𝐍𝐆 𝐖𝐎𝐑𝐊 𝐊𝐔𝐍𝐆 𝐀𝐘𝐀𝐖 𝐌𝐎 𝐌𝐀𝐆𝐈𝐍𝐆 𝐔𝐍𝐄𝐌𝐏𝐋𝐎𝐘𝐄𝐃.',
             '𝐀𝐍𝐎 𝐏𝐀 𝐇𝐈𝐍𝐈𝐇𝐈𝐍𝐓𝐀𝐘 𝐌𝐎? 𝐌𝐀𝐆-𝐀𝐏𝐏𝐋𝐘 𝐊𝐀 𝐍𝐀.',
@@ -96,7 +97,8 @@ class Settings(BaseSettings):
             '𝐌𝐀𝐘 𝐁𝐀𝐆𝐎𝐍𝐆 𝐖𝐎𝐑𝐊. 𝐆𝐀𝐋𝐀𝐖-𝐆𝐀𝐋𝐀𝐖 𝐍𝐀.'
         ]
     def brightdata_inputs(self, kind: str) -> list[dict]:
-        raw=self.brightdata_linkedin_jobs_inputs_json if kind=='linkedin_jobs' else self.brightdata_jobstreet_inputs_json
+        normalized='linkedin_jobs' if kind in ('linkedin','linkedin_jobs') else 'jobstreet'
+        raw=self.brightdata_linkedin_jobs_inputs_json if normalized=='linkedin_jobs' else self.brightdata_jobstreet_inputs_json
         try:
             data=json.loads(raw)
             return data if isinstance(data,list) and all(isinstance(x,dict) for x in data) else []
