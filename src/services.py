@@ -226,7 +226,7 @@ class Pipeline:
         score,reasons,warnings,relevant=evaluate(item)
         _,_,fresh=freshness(item)
         if not relevant or not fresh or (freshness(item)[0] < 0 and score < 85): return None, False
-        job=self.repo.save(item,score,reasons,warnings)
+        job=await asyncio.to_thread(self.repo.save,item,score,reasons,warnings)
         if not job: return None, True
         if notify and score>=self.config.min_notify_score: await self.notify(job)
         return job, True
@@ -234,38 +234,51 @@ class Pipeline:
         async with self._cycle_lock:
             if self._cycle_notifications>=self.config.max_notifications_per_cycle: return
             self._cycle_notifications+=1
-        bot_state=self.repo.state('discord_bot_health',{}) or {}
+        bot_state=await asyncio.to_thread(self.repo.state,'discord_bot_health',{}) or {}
         # Before the first successful bot connection, hold alerts for the bot
         # instead of racing a startup webhook. Once a known bot disconnects,
         # the webhook is the emergency fallback.
         if self.config.discord_bot_token and (bot_state.get('healthy') or not bot_state.get('started_once')):
             job.notification_state='BOT_PENDING'
-            with self.repo.sessions() as s:
-                stored=s.get(Job,job.id); stored.notification_state='BOT_PENDING'; s.commit()
+            def hold_for_bot():
+                with self.repo.sessions() as s:
+                    stored=s.get(Job,job.id)
+                    if stored: stored.notification_state='BOT_PENDING'; s.commit()
+            await asyncio.to_thread(hold_for_bot)
             return
         try:
             job.notification_state=await self.discord.send(job)
             if job.notification_state=='SENT': job.status=JobStatus.NOTIFIED.value
         except httpx.HTTPError as e:
             job.notification_state='FAILED'; log.warning('discord_notification_failed',extra={'job_id':job.id,'error':str(e)})
-        with self.repo.sessions() as s:
-            stored=s.get(Job,job.id); stored.notification_state=job.notification_state; stored.status=job.status; s.commit()
+        def persist_notification():
+            with self.repo.sessions() as s:
+                stored=s.get(Job,job.id)
+                if stored:
+                    stored.notification_state=job.notification_state; stored.status=job.status; s.commit()
+        await asyncio.to_thread(persist_notification)
     async def retry_notifications(self):
         if not self.config.discord_webhook_url: return 0
-        with self.repo.sessions() as s:
-            ids=s.scalars(select(Job.id).where(Job.notification_state=='FAILED',Job.score>=self.config.min_notify_score)).all()
+        def failed_ids():
+            with self.repo.sessions() as s:
+                return s.scalars(select(Job.id).where(Job.notification_state=='FAILED',Job.score>=self.config.min_notify_score)).all()
+        ids=await asyncio.to_thread(failed_ids)
         for job_id in ids:
-            with self.repo.sessions() as s: job=s.get(Job,job_id); await self.notify(job)
+            def load_job():
+                with self.repo.sessions() as s: return s.get(Job,job_id)
+            job=await asyncio.to_thread(load_job)
+            if job: await self.notify(job)
         return len(ids)
     async def run_source(self,source):
-        run=self.repo.run_start(source.name); discovered=new=filtered=0
+        run=await asyncio.to_thread(self.repo.run_start,source.name); discovered=new=filtered=0
         try:
             for attempt in range(3):
                 try: items=await source.fetch(); break
                 except Exception:
                     if attempt==2: raise
                     await asyncio.sleep(2**attempt)
-            baseline=not self.repo.health(source.name).baseline_initialized
+            health=await asyncio.to_thread(self.repo.health,source.name)
+            baseline=not health.baseline_initialized
             ordered=sorted(items,key=lambda x:evaluate(x)[0],reverse=True)
             baseline_candidates=[]
             for item in ordered:
@@ -274,12 +287,12 @@ class Pipeline:
             if baseline:
                 for job in baseline_candidates:
                     async with self._baseline_lock:
-                        allowed=self.repo.reserve_baseline_alert()
+                        allowed=await asyncio.to_thread(self.repo.reserve_baseline_alert)
                     if not allowed: break
                     await self.notify(job)
-            self.repo.run_finish(run,success=True,discovered=discovered,new_jobs=new,filtered=filtered)
-            self.repo.health_success(source.name,discovered,baseline=True)
+            await asyncio.to_thread(self.repo.run_finish,run,success=True,discovered=discovered,new_jobs=new,filtered=filtered)
+            await asyncio.to_thread(self.repo.health_success,source.name,discovered,baseline=True)
         except Exception as e:
-            self.repo.run_finish(run,success=False,error=str(e)); log.warning('source_failed',extra={'source':source.name,'error':str(e)})
-            self.repo.health_failure(source.name,str(e))
+            await asyncio.to_thread(self.repo.run_finish,run,success=False,error=str(e)); log.warning('source_failed',extra={'source':source.name,'error':str(e)})
+            await asyncio.to_thread(self.repo.health_failure,source.name,str(e))
         return {'source':source.name,'discovered':discovered,'new':new,'filtered':filtered}
