@@ -75,6 +75,7 @@ def test_discord_alert_is_compact_and_has_real_link_buttons():
     assert payload['components'][0]['components'][0]['url'] == record.url
     assert any(x['label']=='APPLY NOW' and x['url'].startswith('https://agent.example/actions/') for x in payload['components'][0]['components'])
     assert any(x['label']=='SEARCH JOBS' and x['url']=='https://agent.example/search' for x in payload['components'][1]['components'])
+    assert sum(x['name']=='𝐖𝐀𝐍𝐓 𝐓𝐎 𝐅𝐈𝐍𝐃 𝐀 𝐒𝐏𝐄𝐂𝐈𝐅𝐈𝐂 𝐉𝐎𝐁?' for x in payload['embeds'][0]['fields']) == 1
     assert Discord(None,'',cfg).payload(record,test=True)['components'] == []
 
 def test_signed_actions_expire_and_cannot_be_tampered():

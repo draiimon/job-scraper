@@ -1,5 +1,6 @@
 from __future__ import annotations
 import asyncio, logging
+from datetime import datetime, timedelta, timezone
 from html import escape
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -19,11 +20,35 @@ from .manual_search import ManualJobSearch
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
 cfg=settings(); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
 manual_search=ManualJobSearch(cfg,repo)
+def iso(value): return value.astimezone(timezone.utc).isoformat()
+def scheduler_snapshot():
+    saved=repo.state('scheduler',{}) or {}
+    with repo.sessions() as s:
+        source_rows=s.scalars(select(SourceHealth)).all()
+        recent=s.scalars(select(Job.id).where(Job.date_posted>=datetime.now(timezone.utc)-timedelta(days=7),Job.status!=JobStatus.EXPIRED.value)).all()
+    next_poll=saved.get('next_poll_at'); seconds=0
+    if next_poll:
+        try: seconds=max(0,int((datetime.fromisoformat(next_poll)-datetime.now(timezone.utc)).total_seconds()))
+        except ValueError: pass
+    saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_api_token else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
+    return saved
+async def poll_once():
+    started=datetime.now(timezone.utc)
+    repo.set_state('scheduler',{'status':'running','last_poll_at':iso(started),'next_poll_at':iso(started+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0})
+    pipeline.begin_cycle()
+    outcomes=await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo)))
+    await pipeline.retry_notifications()
+    finished=datetime.now(timezone.utc)
+    state={'status':'running','last_poll_at':iso(finished),'next_poll_at':iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':sum(x['discovered'] for x in outcomes),'new_recent_jobs':sum(x['new'] for x in outcomes),'alerts_sent':pipeline._cycle_notifications}
+    # status update is best-effort: a webhook outage never stops polling.
+    state.update({'sources_working':0,'linkedin_status':'READY' if cfg.brightdata_api_token else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
+    repo.set_state('scheduler',state)
+    try: await pipeline.discord.update_status(repo,scheduler_snapshot())
+    except Exception as exc: logging.warning('discord_status_update_failed',extra={'error':str(exc)})
+    return outcomes
 async def worker():
     while True:
-        pipeline.begin_cycle()
-        await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo)))
-        await pipeline.retry_notifications()
+        await poll_once()
         await asyncio.sleep(cfg.poll_interval_seconds)
 @asynccontextmanager
 async def lifespan(app):
@@ -41,11 +66,10 @@ def health():
     except Exception as e: raise HTTPException(503,detail='database unavailable') from e
     with repo.sessions() as s:
         sources=s.scalars(select(SourceHealth)).all()
-    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_webhook_url),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
+    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_webhook_url),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
 @app.post('/run')
 async def run_once():
-    pipeline.begin_cycle()
-    return await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo)))
+    return await poll_once()
 @app.get('/jobs')
 def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
     with repo.sessions() as s:
@@ -60,16 +84,20 @@ class FindRequest(BaseModel):
     freshness: str = 'Past 24 hours'
     remote: str = ''
     limit: int = 10
+    work_setup: str = ''
+    min_score: int = 0
+    entry_level_only: bool = True
+    source_filter: str = 'all'
 @app.post('/find')
 async def find_jobs(request: FindRequest):
     try:
-        result=await manual_search.find(request.role,request.location,request.freshness,request.remote,request.limit)
+        result=await manual_search.find(request.role,request.location,request.freshness,request.remote,request.limit,request.work_setup,request.min_score,request.entry_level_only,request.source_filter)
         return {'count':len(result),'jobs':result}
     except Exception as exc:
         raise HTTPException(503,detail='manual search unavailable; existing sources remain active') from exc
 @app.get('/search',response_class=HTMLResponse)
 def search_page():
-    return HTMLResponse('''<!doctype html><html><head><title>Search latest jobs</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><h1>Search latest jobs</h1><form id="search"><label>Role / keyword <input name="role" required placeholder="Junior DevOps"></label><br><label>Location <input name="location" value="Philippines"></label><br><label>Freshness <select name="freshness"><option>Past 24 hours</option><option>Past 3 days</option><option>Past 7 days</option></select></label><br><label>Remote <input name="remote" placeholder="Remote"></label><br><label>Result limit <input name="limit" value="10" min="1" max="10" type="number"></label><br><button>SEARCH</button></form><button id="send" hidden>SEND RESULTS TO DISCORD</button><main id="results"></main><script>let last=[];const out=document.getElementById('results');function show(j){let a=document.createElement('article'),h=document.createElement('h2'),p=document.createElement('p'),d=document.createElement('p'),l=document.createElement('a');h.textContent=j.title;p.textContent=j.company+' · '+j.location;d.textContent='Posted: '+(j.date_posted||'unavailable')+' · '+j.score+'% match';l.textContent='VIEW JOB';l.href=j.url;l.target='_blank';l.rel='noreferrer';a.append(h,p,d,l);out.append(a)}document.getElementById('search').onsubmit=async e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));f.limit=+f.limit;let r=await fetch('/find',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});let d=await r.json();last=d.jobs||[];out.replaceChildren();if(last.length)last.forEach(show);else out.textContent='No recent qualifying jobs found.';document.getElementById('send').hidden=!last.length};document.getElementById('send').onclick=async()=>{let r=await fetch('/search/discord',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobs:last.map(j=>j.id)})});alert(r.ok?'Results sent to Discord.':'Could not send results.')};</script></body></html>''')
+    return HTMLResponse('''<!doctype html><html><head><title>Search latest jobs</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><h1>Search latest jobs</h1><p id="schedule">Loading scheduler status…</p><form id="search"><label>Job title / keyword <input name="role" required placeholder="Junior DevOps"></label><br><label>Location <select name="location"><option>Philippines</option><option>Remote Philippines</option><option>Manila</option></select></label><br><label>Freshness <select name="freshness"><option>Past 24 hours</option><option>Past 3 days</option><option>Past 7 days</option><option>Past 14 days</option></select></label><br><label>Work setup <select name="work_setup"><option value="">Any</option><option>Remote</option><option>Hybrid</option><option>On-site</option></select></label><br><label>Minimum match score <input name="min_score" value="0" min="0" max="100" type="number"></label><br><label>Entry-level only <input name="entry_level_only" checked type="checkbox"></label><br><label>Source <select name="source_filter"><option value="all">All available (LinkedIn)</option><option value="linkedin">LinkedIn</option></select></label><br><label>Result limit <input name="limit" value="10" min="1" max="10" type="number"></label><br><button>SEARCH</button></form><button id="send" hidden>SEND RESULTS TO DISCORD</button><main id="results"></main><script>let last=[],seconds=0;const out=document.getElementById('results'),schedule=document.getElementById('schedule');function show(j){let a=document.createElement('article'),h=document.createElement('h2'),p=document.createElement('p'),d=document.createElement('p'),l=document.createElement('a');h.textContent=j.title;p.textContent=j.company+' · '+j.location;d.textContent='Posted: '+(j.date_posted||'unavailable')+' · '+j.score+'% match';l.textContent='VIEW JOB';l.href=j.url;l.target='_blank';l.rel='noreferrer';a.append(h,p,d,l);out.append(a)}function clock(){if(seconds<=0){schedule.textContent='Scanning for new jobs…';setTimeout(loadStatus,3000);return}let m=Math.floor(seconds/60),s=String(seconds%60).padStart(2,'0');schedule.textContent='Next automatic scan in: '+m+':'+s;seconds--}async function loadStatus(){try{let d=await (await fetch('/health')).json();seconds=d.scheduler.seconds_until_next_poll||0;clock()}catch{schedule.textContent='Scheduler status unavailable'}}setInterval(clock,1000);loadStatus();document.getElementById('search').onsubmit=async e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));f.limit=+f.limit;f.min_score=+f.min_score;f.entry_level_only=!!f.entry_level_only;let r=await fetch('/find',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});let d=await r.json();last=d.jobs||[];out.replaceChildren();if(last.length)last.forEach(show);else out.textContent='No recent qualifying jobs found.';document.getElementById('send').hidden=!last.length};document.getElementById('send').onclick=async()=>{let r=await fetch('/search/discord',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobs:last.map(j=>j.id)})});alert(r.ok?'Results sent to Discord.':'Could not send results.')};</script></body></html>''')
 class DiscordSearchResults(BaseModel): jobs: list[int]
 @app.post('/search/discord')
 async def send_search_results(request: DiscordSearchResults):

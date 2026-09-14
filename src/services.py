@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, logging, random
+import asyncio, logging, random, json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -95,6 +95,19 @@ class Repository:
     def by_fingerprint(self, fingerprint: str) -> Job | None:
         with self.sessions() as s:
             return s.scalar(select(Job).where(Job.fingerprint==fingerprint))
+    def state(self, key: str, default=None):
+        with self.sessions() as s:
+            item=s.get(AppState,key)
+            if not item: return default
+            try: return json.loads(item.value)
+            except json.JSONDecodeError: return default
+    def set_state(self, key: str, value) -> None:
+        with self.sessions() as s:
+            item=s.get(AppState,key)
+            encoded=json.dumps(value,default=str)
+            if item: item.value=encoded
+            else: s.add(AppState(key=key,value=encoded))
+            s.commit()
 class Discord:
     def __init__(self,url:str|None, motivations:list[str]|str='', cfg:Settings|None=None): self.url=url; self.motivations=motivations if isinstance(motivations,list) else [motivations]; self.cfg=cfg
     def _link(self,job,action):
@@ -132,6 +145,8 @@ class Discord:
         footer=f'{kind.replace("_"," ").title()}' + (f' · {name}' if name else '')
         if test: footer='𝐓𝐄𝐒𝐓 𝐀𝐋𝐄𝐑𝐓 — No real application will be sent.'
         fields.append({'name':'𝐒𝐓𝐀𝐓𝐔𝐒','value':'Ready to review' if job.status not in ('APPLIED','IGNORED') else job.status.title(),'inline':False})
+        if self.cfg and self.cfg.public_base_url:
+            fields.append({'name':'𝐖𝐀𝐍𝐓 𝐓𝐎 𝐅𝐈𝐍𝐃 𝐀 𝐒𝐏𝐄𝐂𝐈𝐅𝐈𝐂 𝐉𝐎𝐁?','value':'Find or filter the exact role you want to apply for here.','inline':False})
         return {'content':random.choice(self.motivations),'embeds':[{'title':label,'description':f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n\n'+' · '.join(details),'url':job.url,'fields':fields,'footer':{'text':footer}}],'components':[] if test else rows}
     async def send(self,job):
         if not self.url: return 'SKIPPED'
@@ -141,6 +156,24 @@ class Discord:
         async with httpx.AsyncClient(timeout=15) as c:
             r=await c.post(self.url,params={'with_components':'true'},json=payload); r.raise_for_status()
         return 'SENT'
+    async def update_status(self, repo: Repository, scheduler_state: dict):
+        """Create one webhook status message, then edit it after each cycle."""
+        if not self.url: return 'SKIPPED'
+        def stamp(value):
+            if not value: return '—'
+            return datetime.fromisoformat(value).astimezone(ZoneInfo('Asia/Manila')).strftime('%I:%M %p')
+        sources=scheduler_state.get('sources_working',0); linked=scheduler_state.get('linkedin_status','DISABLED'); jobstreet=scheduler_state.get('jobstreet_status','DISABLED')
+        payload={'embeds':[{'title':'𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑 𝐒𝐓𝐀𝐓𝐔𝐒','description':f"Service: ONLINE\nScheduler: {scheduler_state.get('status','RUNNING').upper()}\nLast scan: {stamp(scheduler_state.get('last_poll_at'))}\nNext scan: {stamp(scheduler_state.get('next_poll_at'))}\n\nSources: {sources} active\nJobs checked: {scheduler_state.get('jobs_checked',0)}\nNew recent jobs: {scheduler_state.get('new_recent_jobs',0)}\nAlerts sent: {scheduler_state.get('alerts_sent',0)}\nDatabase: CONNECTED\nLinkedIn: {linked}\nJobStreet: {jobstreet}"}]}
+        existing=repo.state('discord_status_message_id')
+        async with httpx.AsyncClient(timeout=15) as client:
+            if existing:
+                response=await client.patch(f'{self.url}/messages/{existing}',json=payload)
+                if response.status_code==404: existing=None
+                else: response.raise_for_status(); return 'UPDATED'
+            response=await client.post(self.url,params={'wait':'true'},json=payload); response.raise_for_status()
+            message_id=response.json().get('id')
+            if message_id: repo.set_state('discord_status_message_id',message_id)
+        return 'CREATED'
 class Pipeline:
     def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0
     def begin_cycle(self): self._cycle_notifications=0
