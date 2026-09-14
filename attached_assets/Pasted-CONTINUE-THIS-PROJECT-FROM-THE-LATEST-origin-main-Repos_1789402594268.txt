@@ -1,0 +1,478 @@
+CONTINUE THIS PROJECT FROM THE LATEST origin/main.
+
+Repository:
+https://github.com/draiimon/job-scraper
+
+Branch:
+main
+
+FIRST:
+git fetch origin
+git pull --ff-only origin main
+git status --short
+git log -3 --oneline
+
+DO NOT reset or rewrite working architecture.
+
+==================================================
+CURRENT VERIFIED STATE FROM THE PREVIOUS REPLIT
+==================================================
+
+The previous live debugging session already found and fixed important production issues.
+
+1. BROWSERLESS ROOT CAUSE FOUND
+
+Real Browserless failure was:
+
+401 Invalid API key
+
+Cause:
+the application preferred an OLD Browserless credential stored in Vault over the CURRENT deployment/runtime secret.
+
+The previous workspace changed credential precedence so the CURRENT valid deployment credential wins.
+
+After that fix, the real signed JobStreet POST returned:
+
+HTTP 200
+
+and contained:
+
+- automatic Browserless redirect script
+- fallback live-browser link
+
+DO NOT revert this fix.
+
+==================================================
+2. JOBSTREET HANDOFF STATUS
+==================================================
+
+The real flow reached:
+
+signed JobStreet setup request
+→ application/database
+→ Browserless
+→ live browser handoff
+
+The latest real POST returned 200.
+
+You must now finish verifying that the connection status becomes exactly:
+
+WAITING FOR USER LOGIN
+
+before my credentials are needed.
+
+Expected production flow:
+
+v!jobstreet
+→ CONNECT JOBSTREET
+→ immediate Discord ACK/defer
+→ private signed setup URL
+→ START JOBSTREET LOGIN
+→ Browserless launches
+→ automatically navigate browser to JobStreet
+→ live interactive URL opens
+→ WAITING FOR USER LOGIN
+
+The ONLY remaining manual part should be:
+
+I personally complete:
+- Google login
+- 2FA
+- CAPTCHA/security prompts
+
+DO NOT automate or bypass those.
+
+==================================================
+3. DATABASE SCAN STORAGE
+==================================================
+
+A real production scan previously exposed:
+
+app_state.value VARCHAR(500)
+
+was too small for the new scan counter payload.
+
+The previous workspace began/fixed schema compatibility.
+
+VERIFY THE REAL DATABASE, not just ORM models.
+
+Confirm:
+
+- app_state payload can exceed 500 chars safely
+- existing data is preserved
+- scan counters persist
+- counters read back correctly
+- /health exposes them
+- restart does not break them
+
+Use a safe idempotent migration.
+
+==================================================
+4. LIVE SEARCH IS NOW WORKING BETTER
+==================================================
+
+Previous real verification reported:
+
+software search:
+2 relevant jobs
+
+developer search:
+3 relevant jobs
+
+ATS + Bright Data worked together.
+
+Real counters were produced with no previous schema error.
+
+Preserve this.
+
+==================================================
+5. 90-DAY JOB DISCOVERY
+==================================================
+
+Keep the expanded discovery window:
+
+0–1 day = highest
+2–7 days = very high
+8–14 days = high
+15–30 days = normal
+31–60 days = lower
+61–90 days = eligible
+
+>90 days:
+normally skip unless genuinely reposted/reactivated.
+
+Computer/IT-related jobs within 90 days may remain searchable/application-eligible if still active.
+
+Never call an old listing "new."
+
+==================================================
+6. BROAD COMPUTER/IT COVERAGE
+==================================================
+
+Keep broad discovery for:
+
+DevOps
+Cloud
+Infrastructure
+Platform
+SRE
+Linux
+Systems
+Server Admin
+Network
+NOC
+IT Support
+Technical Support
+Help Desk
+Service Desk
+Application Support
+IT Operations
+Systems Analyst
+Software Engineer
+Software Developer
+Backend
+Frontend
+Full Stack
+Web Developer
+Python
+Java
+PHP
+Node.js
+QA
+Testing
+Automation QA
+Cybersecurity
+SOC
+Database-related technical roles
+other legitimate computer-related entry-level roles
+
+Exclude unrelated business/nontechnical roles.
+
+Goal:
+around 30 useful jobs/day WHEN legitimate supply exists.
+
+Do not fake volume.
+
+==================================================
+7. VERIFY VIEWALL
+==================================================
+
+Actually test:
+
+v!viewall
+v!view all
+
+Expected:
+
+Loading stored jobs...
+→ database query
+→ SAME message becomes paginated job board
+
+Must NOT route into v!search.
+
+Must NOT use ephemeral=True on normal prefix command sends.
+
+Verify:
+
+- real stored records
+- newest/reposted sort
+- match scores
+- source
+- age
+- pagination
+- PREVIOUS/NEXT
+- no duplicate response
+- graceful DB failure message
+
+==================================================
+8. VERIFY SEARCH RELEVANCE
+==================================================
+
+Actually run the production-equivalent pipeline for:
+
+software engineer
+developer
+DevOps
+IT Support
+
+Query relevance must come before generic profile score.
+
+Software searches should prioritize software-family roles.
+
+Do not return infrastructure-only suggestions first if relevant software jobs exist.
+
+Report:
+
+jobs reviewed
+0–90 day jobs
+query-relevant jobs
+entry-level-compatible jobs
+qualifying jobs
+
+==================================================
+9. LINKEDIN
+==================================================
+
+Previous production state reported LinkedIn READY.
+
+Verify the actual current source status.
+
+Bright Data must:
+
+- fail gracefully
+- use broad tech queries
+- respect configured account limits
+- not block ATS scanning
+- not duplicate ATS jobs
+
+Do not invent credentials/dataset IDs.
+
+==================================================
+10. REAL JOBSTREET TEST
+==================================================
+
+YOU MUST TEST THIS YOURSELF UP TO THE HUMAN LOGIN BOUNDARY.
+
+Do not stop at unit tests.
+
+Actually verify:
+
+signed request creation
+→ setup GET/POST
+→ Browserless CDP
+→ temporary browser
+→ JobStreet navigation
+→ live interactive URL
+→ waiting state
+
+Acceptable final pre-login result:
+
+BROWSERLESS: PASS
+JOBSTREET PAGE: PASS
+LIVE URL: PASS
+JOBSTREET STATUS: WAITING FOR USER LOGIN
+
+If any of those fail, FIX THEM.
+
+==================================================
+11. DISCORD TIMEOUT SAFETY
+==================================================
+
+Every button/modal must ACK/defer immediately.
+
+No user should ever see:
+
+"didn't respond in time"
+
+Slow:
+database
+Browserless
+Bright Data
+scan
+PDF
+AI
+
+must happen after ACK.
+
+==================================================
+12. RUN THE REAL APPLICATION
+==================================================
+
+Start the actual app.
+
+Verify:
+
+DATABASE CONNECTED
+DISCORD CONNECTED
+SCHEDULER RUNNING
+900-second cadence
+LINKEDIN status
+JOBSTREET status
+CONTROL PANEL
+/health 200
+
+Do not launch duplicate Discord gateways unnecessarily.
+
+==================================================
+13. TESTS
+==================================================
+
+Run:
+
+pytest -q
+python -m compileall -q src
+git diff --check
+
+Then perform REAL runtime checks.
+
+Unit tests alone are not sufficient.
+
+==================================================
+14. DOCUMENTATION
+==================================================
+
+Update:
+
+README.md
+docs/PROJECT_CHECKPOINT.md
+
+only where needed.
+
+Document the VERIFIED state:
+
+- Browserless credential precedence fix
+- JobStreet connection handoff
+- 90-day discovery
+- broad role coverage
+- viewall
+- search relevance
+- scan counters
+- LinkedIn
+- remaining human JobStreet login step
+
+==================================================
+15. COMMIT + PUSH
+==================================================
+
+When everything is actually verified:
+
+Git author:
+
+Mark Andrei Castillo
+99703880+draiimon@users.noreply.github.com
+
+Never commit:
+
+.env
+tokens
+cookies
+storage state
+Pasted-*
+private resume
+generated private application files
+
+Stage legitimate project files only.
+
+Create one clean commit.
+
+NORMAL push to origin/main.
+
+No force push.
+
+==================================================
+FINAL RESPONSE ONLY
+==================================================
+
+APPLICATION STARTUP: PASS/FAIL
+
+DATABASE SCHEMA/PERSISTENCE: PASS/FAIL
+
+REAL SCAN: PASS/FAIL
+
+SCAN JOBS CHECKED: [number]
+
+LINKEDIN: READY/DISABLED/FAIL
+
+JOBSTREET SIGNED LINK: PASS/FAIL
+
+BROWSERLESS AUTH: PASS/FAIL
+
+JOBSTREET PAGE LOAD: PASS/FAIL
+
+LIVE INTERACTIVE URL: PASS/FAIL
+
+JOBSTREET STATUS:
+READY / WAITING FOR USER LOGIN / FAIL
+
+DISCORD TIMEOUT ISSUE:
+FIXED/NOT FIXED
+
+VIEWALL:
+PASS/FAIL
+
+VIEW ALL ALIAS:
+PASS/FAIL
+
+VIEWALL STORED JOBS:
+[number]
+
+SOFTWARE SEARCH:
+PASS/FAIL
+
+SOFTWARE RELEVANT JOBS:
+[number]
+
+DEVELOPER SEARCH:
+PASS/FAIL
+
+DEVELOPER RELEVANT JOBS:
+[number]
+
+90-DAY DISCOVERY:
+PASS/FAIL
+
+BROAD COMPUTER ROLE COVERAGE:
+PASS/FAIL
+
+~30 USEFUL JOBS/DAY TARGET:
+REALISTIC / PARTIALLY REALISTIC / NOT CURRENTLY REALISTIC
+
+15-MIN SCHEDULER:
+PASS/FAIL
+
+TESTS:
+X passed / X failed
+
+CHECKPOINT:
+UPDATED/UNCHANGED
+
+FINAL COMMIT:
+[hash]
+
+PUSH:
+PASS/FAIL
+
+REMAINING MANUAL STEP:
+[ONLY my JobStreet login / exact issue / NONE]
+
+DO NOT CLAIM PASS FOR JOBSTREET UNTIL A REAL USABLE LIVE BROWSER URL IS PRODUCED.
