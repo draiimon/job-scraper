@@ -41,8 +41,14 @@ async def poll_once():
         if not cfg.discord_bot_token:
             try: await pipeline.discord.update_status(repo,scheduler_snapshot())
             except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
-        pipeline.begin_cycle()
-        outcomes=await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo)))
+        pipeline.begin_cycle(); sources=configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo); semaphore=asyncio.Semaphore(cfg.scan_source_concurrency)
+        async def limited(source):
+            async with semaphore:
+                try: return await asyncio.wait_for(pipeline.run_source(source),timeout=cfg.scan_source_timeout_seconds)
+                except asyncio.TimeoutError:
+                    repo.health_failure(source.name,'scan source timeout')
+                    return {'source':source.name,'discovered':0,'new':0,'filtered':0,'timeout':True}
+        outcomes=await asyncio.gather(*(limited(source) for source in sources))
         await pipeline.retry_notifications()
         finished=datetime.now(timezone.utc)
         checked=sum(x['discovered'] for x in outcomes); new=sum(x['new'] for x in outcomes); filtered=sum(x['filtered'] for x in outcomes)

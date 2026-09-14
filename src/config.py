@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     min_auto_application_score: int = 85
     max_notifications_per_cycle: int = 3
     manual_scan_cooldown_seconds: int = 300
+    scan_source_concurrency: int = 6
+    scan_source_timeout_seconds: int = 15
     auto_send_email_applications: bool = False
     polling_enabled: bool = True
     poll_interval_seconds: int = 900

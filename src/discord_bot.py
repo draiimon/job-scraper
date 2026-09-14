@@ -15,7 +15,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
     except ImportError:
         log.error('discord_bot_dependency_missing'); return
     intents=discord.Intents.default(); intents.message_content=True
-    bot=discord.Client(intents=intents); panel_channel=None; panel_view=None; panel_task=None; registered=False; search_cooldowns={}
+    bot=discord.Client(intents=intents); panel_channel=None; panel_view=None; panel_task=None; scan_task=None; registered=False; search_cooldowns={}
 
     async def prepare_letter(job_id, use_ai=True, regenerate=False):
         from .applications import generated_letter
@@ -152,9 +152,9 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         def __init__(self): super().__init__(timeout=None)
         @discord.ui.button(label='SCAN NOW',style=discord.ButtonStyle.primary,custom_id='jobhunter:scan')
         async def scan(self,interaction,button):
-            await interaction.response.defer(ephemeral=True,thinking=True)
-            try: await manual_scan(); await refresh_panel(); await interaction.followup.send('Scan complete.',ephemeral=True)
-            except Exception as exc: await interaction.followup.send(str(getattr(exc,'detail','Scan unavailable.')),ephemeral=True)
+            if scan_task and not scan_task.done(): await interaction.response.send_message('A scan is already running.',ephemeral=True); return
+            await interaction.response.send_message('𝐒𝐂𝐀𝐍 𝐒𝐓𝐀𝐑𝐓𝐄𝐃\nSearching for recent active jobs…',ephemeral=True)
+            await launch_scan()
         @discord.ui.button(label='SEARCH JOBS',style=discord.ButtonStyle.secondary,custom_id='jobhunter:search')
         async def search(self,interaction,button): await interaction.response.send_modal(SearchModal())
         @discord.ui.button(label='VIEW STATUS',style=discord.ButtonStyle.secondary,custom_id='jobhunter:status')
@@ -189,6 +189,20 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 message=await channel.fetch_message(int(message_id)); await message.edit(embed=panel_embed(),view=panel_view); return
             except Exception: repo.set_state('discord_bot_control_panel_message_id',None)
         message=await channel.send(embed=panel_embed(),view=panel_view); repo.set_state('discord_bot_control_panel_message_id',str(message.id))
+    async def launch_scan(message=None):
+        nonlocal scan_task
+        if scan_task and not scan_task.done(): return False
+        async def background():
+            started=time.monotonic()
+            try:
+                outcomes=await manual_scan(); state=scheduler_snapshot(); duration=int(time.monotonic()-started)
+                text=f"𝐒𝐂𝐀𝐍 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄\nDuration: {duration}s\nSources: {len(outcomes)}\nJobs checked: {state.get('jobs_checked',0)}\nNew matches: {state.get('new_recent_jobs',0)}\nAlerts sent: {state.get('alerts_sent',0)}"
+            except Exception as exc: text=str(getattr(exc,'detail','Scan unavailable.'))
+            await refresh_panel()
+            if message:
+                try: await message.edit(content=text)
+                except Exception: pass
+        scan_task=asyncio.create_task(background()); return True
     async def deliver_pending_alerts():
         from sqlalchemy import select
         from .models import Job, JobStatus
@@ -217,7 +231,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             panel_view=ControlView(); bot.add_view(panel_view); registered=True
         await refresh_panel()
         if not panel_task: panel_task=asyncio.create_task(panel_watcher())
-        repo.set_state('discord_bot_health',{'healthy':True})
+        repo.set_state('discord_bot_health',{'healthy':True,'started_once':True})
         log.info('discord_bot_ready')
     @bot.event
     async def on_message(message):
@@ -244,11 +258,11 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 embed,view=card(job); await message.channel.send(embed=embed,view=view)
         elif command=='status': await message.channel.send(embed=panel_embed())
         elif command=='scan':
-            try: await manual_scan(); await refresh_panel(); await message.channel.send('Scan complete.')
-            except Exception as exc: await message.channel.send(str(getattr(exc,'detail','Scan unavailable.')))
+            if scan_task and not scan_task.done(): await message.channel.send('A scan is already running.'); return
+            notice=await message.channel.send('𝐒𝐂𝐀𝐍 𝐒𝐓𝐀𝐑𝐓𝐄𝐃\nSearching for recent active jobs…'); await launch_scan(notice)
         else: await message.channel.send('Use `v!help`.')
     try: await bot.start(cfg.discord_bot_token)
     finally:
-        repo.set_state('discord_bot_health',{'healthy':False})
+        repo.set_state('discord_bot_health',{'healthy':False,'started_once':True})
         if panel_task: panel_task.cancel()
         if not bot.is_closed(): await bot.close()

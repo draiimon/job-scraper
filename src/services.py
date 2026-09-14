@@ -211,7 +211,11 @@ class Pipeline:
         async with self._cycle_lock:
             if self._cycle_notifications>=self.config.max_notifications_per_cycle: return
             self._cycle_notifications+=1
-        if self.config.discord_bot_token:
+        bot_state=self.repo.state('discord_bot_health',{}) or {}
+        # Before the first successful bot connection, hold alerts for the bot
+        # instead of racing a startup webhook. Once a known bot disconnects,
+        # the webhook is the emergency fallback.
+        if self.config.discord_bot_token and (bot_state.get('healthy') or not bot_state.get('started_once')):
             job.notification_state='BOT_PENDING'
             with self.repo.sessions() as s:
                 stored=s.get(Job,job.id); stored.notification_state='BOT_PENDING'; s.commit()
