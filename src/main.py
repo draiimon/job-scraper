@@ -27,6 +27,9 @@ async def lifespan(app):
     yield
     if task: task.cancel()
 app=FastAPI(title='Philippine Job Agent',lifespan=lifespan)
+@app.api_route('/',methods=['GET','HEAD'],include_in_schema=False,response_class=HTMLResponse)
+def home():
+    return HTMLResponse('''<!doctype html><html><head><title>Philippine Job Agent</title><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><h1>Philippine Job Agent</h1><p>Service is running.</p><ul><li><a href="/health">Health</a></li><li><a href="/docs">API documentation</a></li><li><a href="/jobs?min_score=60">Qualifying jobs</a></li></ul></body></html>''')
 @app.get('/health')
 def health():
     try:

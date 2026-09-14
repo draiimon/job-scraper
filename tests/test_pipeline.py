@@ -10,6 +10,7 @@ from src.models import Job
 from src.ai import GeminiManager, KeyState
 from src.security import ActionTokens
 from src.applications import valid_revision
+from src.main import home
 
 def job(**overrides):
     values=dict(source='test',source_job_id='one',title='Junior DevOps Engineer',company='Cloud PH',location='Taguig, Philippines — Hybrid',description='Fresh graduate AWS Docker Terraform Linux CI/CD Kubernetes.',url='https://example.com/one',date_posted=datetime.now(timezone.utc)-timedelta(hours=2))
@@ -79,6 +80,9 @@ def test_ai_revision_validator_rejects_fabricated_claims():
 def test_supabase_postgres_url_uses_installed_psycopg_driver():
     repo=Repository('postgresql://user:password@example.com:5432/database')
     assert repo.engine.url.drivername == 'postgresql+psycopg'
+
+def test_root_route_is_render_probe_friendly():
+    assert home().status_code == 200
 
 @pytest.mark.asyncio
 async def test_gemini_429_uses_pool_cooldown_and_cache():
