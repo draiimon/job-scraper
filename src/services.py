@@ -211,8 +211,7 @@ class Pipeline:
         async with self._cycle_lock:
             if self._cycle_notifications>=self.config.max_notifications_per_cycle: return
             self._cycle_notifications+=1
-        bot_healthy=bool((self.repo.state('discord_bot_health',{}) or {}).get('healthy'))
-        if self.config.discord_bot_token and bot_healthy:
+        if self.config.discord_bot_token:
             job.notification_state='BOT_PENDING'
             with self.repo.sessions() as s:
                 stored=s.get(Job,job.id); stored.notification_state='BOT_PENDING'; s.commit()

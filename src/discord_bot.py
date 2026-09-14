@@ -1,6 +1,7 @@
 from __future__ import annotations
 import asyncio, logging, time
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from .security import ActionTokens
 
@@ -16,6 +17,16 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
     intents=discord.Intents.default(); intents.message_content=True
     bot=discord.Client(intents=intents); panel_channel=None; panel_view=None; panel_task=None; registered=False; search_cooldowns={}
 
+    async def prepare_letter(job_id, use_ai=True, regenerate=False):
+        from .applications import generated_letter
+        from .models import Job
+        with repo.sessions() as s: job=s.get(Job,job_id)
+        if not job: return None,None,None
+        letter,mode=await generated_letter(job,use_ai,regenerate)
+        with repo.sessions() as s:
+            stored=s.get(Job,job_id); stored.raw_metadata={**(stored.raw_metadata or {}),'cover_letter':letter,'cover_letter_mode':mode}; s.commit(); job=stored
+        return job,letter,mode
+
     def stamp(value):
         if not value: return '—'
         try: return datetime.fromisoformat(value).astimezone(ZoneInfo('Asia/Manila')).strftime('%I:%M %p')
@@ -29,17 +40,67 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         embed.add_field(name='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',value='Use **SEARCH JOBS** or type `v!search Junior DevOps`. Everything happens inside Discord.',inline=False)
         embed.set_footer(text='After Hours Job Hunter • Made by masoncalix')
         return embed
+    class ReviewView(discord.ui.View):
+        def __init__(self, job_id): super().__init__(timeout=900); self.job_id=job_id
+        async def letter(self):
+            from .models import Job
+            with repo.sessions() as s: job=s.get(Job,self.job_id)
+            return job,(job.raw_metadata or {}).get('cover_letter','') if job else ''
+        @discord.ui.button(label='VIEW COVER LETTER',style=discord.ButtonStyle.secondary)
+        async def view_letter(self,interaction,button):
+            job,letter=await self.letter()
+            if not letter: await interaction.response.send_message('No cover letter is available.',ephemeral=True); return
+            chunks=[letter[i:i+3900] for i in range(0,len(letter),3900)]
+            await interaction.response.send_message(embed=discord.Embed(title='𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑',description=chunks[0],colour=0xF59E0B),ephemeral=True)
+            for chunk in chunks[1:]: await interaction.followup.send(embed=discord.Embed(description=chunk,colour=0xF59E0B),ephemeral=True)
+        @discord.ui.button(label='REGENERATE',style=discord.ButtonStyle.secondary)
+        async def regenerate(self,interaction,button):
+            await interaction.response.defer(ephemeral=True,thinking=True); _,_,mode=await prepare_letter(self.job_id,True,True); await interaction.followup.send(f'Cover letter regenerated with {mode}.',ephemeral=True)
+        @discord.ui.button(label='USE TEMPLATE',style=discord.ButtonStyle.secondary)
+        async def template(self,interaction,button):
+            await interaction.response.defer(ephemeral=True,thinking=True); _,_,mode=await prepare_letter(self.job_id,False,True); await interaction.followup.send(f'Cover letter set to {mode}.',ephemeral=True)
+        @discord.ui.button(label='VIEW RESUME',style=discord.ButtonStyle.secondary)
+        async def resume(self,interaction,button):
+            path=Path(cfg.resume_path) if cfg.resume_path else None
+            if not path or not path.exists(): await interaction.response.send_message('Private resume file is not configured on the service.',ephemeral=True); return
+            await interaction.response.send_message(file=discord.File(path,filename='Mark_Andrei_Castillo_Resume.pdf'),ephemeral=True)
+        @discord.ui.button(label='SEND APPLICATION',style=discord.ButtonStyle.primary)
+        async def send(self,interaction,button):
+            from .models import Job
+            with repo.sessions() as s: job=s.get(Job,self.job_id)
+            if not job: await interaction.response.send_message('Job not found.',ephemeral=True); return
+            if job.status=='APPLIED': await interaction.response.send_message('Already applied. No duplicate application will be sent.',ephemeral=True); return
+            view=ConfirmSendView(self.job_id)
+            await interaction.response.send_message(embed=discord.Embed(title='𝐂𝐎𝐍𝐅𝐈𝐑𝐌 𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍',description=f'**{job.company}**\n{job.title}\n\nResume attached: configured on send\nCover letter attached: ready\n\nDry run: {"ON" if cfg.application_dry_run else "OFF"}',colour=0xF59E0B),view=view,ephemeral=True)
+        @discord.ui.button(label='CANCEL',style=discord.ButtonStyle.secondary)
+        async def cancel(self,interaction,button): await interaction.response.send_message('Application review cancelled.',ephemeral=True)
+    class ConfirmSendView(discord.ui.View):
+        def __init__(self,job_id): super().__init__(timeout=600); self.job_id=job_id
+        @discord.ui.button(label='CONFIRM SEND',style=discord.ButtonStyle.danger)
+        async def confirm(self,interaction,button):
+            from .models import Job
+            with repo.sessions() as s:
+                job=s.get(Job,self.job_id)
+                if not job: await interaction.response.send_message('Job not found.',ephemeral=True); return
+                if job.status=='APPLIED': await interaction.response.send_message('Already applied. No duplicate application will be sent.',ephemeral=True); return
+                if cfg.application_dry_run: job.raw_metadata={**(job.raw_metadata or {}),'application_dry_run_at':datetime.now().isoformat()}; s.commit(); await interaction.response.send_message('Dry run complete. No employer was contacted.',ephemeral=True); return
+            await interaction.response.send_message('Sending is not enabled for live applications.',ephemeral=True)
+        @discord.ui.button(label='CANCEL',style=discord.ButtonStyle.secondary)
+        async def cancel(self,interaction,button): await interaction.response.send_message('Send cancelled.',ephemeral=True)
     class JobView(discord.ui.View):
         def __init__(self, job):
             super().__init__(timeout=900); self.job_id=job.id
             self.add_item(discord.ui.Button(label='VIEW JOB',style=discord.ButtonStyle.link,url=job.url))
         @discord.ui.button(label='APPLY NOW',style=discord.ButtonStyle.primary)
         async def apply(self,interaction,button):
-            from .models import Job
-            with repo.sessions() as s: job=s.get(Job,self.job_id)
-            if not job: await interaction.response.send_message('This job is no longer available.',ephemeral=True); return
-            embed=discord.Embed(title='𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖',description=f'**{job.title}**\n{job.company}\n\nUse VIEW JOB to open the employer application portal. No application is sent automatically.',colour=0xF59E0B)
-            await interaction.response.send_message(embed=embed,ephemeral=True)
+            await interaction.response.defer(ephemeral=True,thinking=True)
+            job,_,mode=await prepare_letter(self.job_id,True)
+            if not job: await interaction.followup.send('This job is no longer available.',ephemeral=True); return
+            embed=discord.Embed(title='𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖',description=f'**{job.title}**\n{job.company}',colour=0xF59E0B)
+            embed.add_field(name='Resume',value='READY' if cfg.resume_path and Path(cfg.resume_path).exists() else 'NOT CONFIGURED',inline=True)
+            embed.add_field(name='Cover Letter',value=f'GENERATED WITH {mode}',inline=True)
+            embed.add_field(name='Application Method',value='Email' if job.application_email else 'Employer portal',inline=False)
+            await interaction.followup.send(embed=embed,view=ReviewView(self.job_id),ephemeral=True)
         @discord.ui.button(label='SAVE',style=discord.ButtonStyle.secondary)
         async def save(self,interaction,button):
             from .models import Job
@@ -110,10 +171,13 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
     async def resolve_channel():
         nonlocal panel_channel
         if panel_channel: return panel_channel
-        if not cfg.discord_webhook_url: return None
         try:
-            hook=discord.Webhook.from_url(cfg.discord_webhook_url,client=bot); fetched=await hook.fetch()
-            panel_channel=bot.get_channel(fetched.channel_id) or await bot.fetch_channel(fetched.channel_id)
+            if cfg.discord_control_channel_id:
+                channel_id=int(cfg.discord_control_channel_id)
+                panel_channel=bot.get_channel(channel_id) or await bot.fetch_channel(channel_id)
+            elif cfg.discord_webhook_url:
+                hook=discord.Webhook.from_url(cfg.discord_webhook_url,client=bot); fetched=await hook.fetch()
+                panel_channel=bot.get_channel(fetched.channel_id) or await bot.fetch_channel(fetched.channel_id)
         except Exception as exc: log.warning('discord_control_channel_unavailable',extra={'error':str(exc)})
         return panel_channel
     async def refresh_panel():

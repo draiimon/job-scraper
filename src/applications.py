@@ -32,6 +32,14 @@ async def revised_cover_letter(job: Job) -> str:
             f"Role: {job.title}\nCompany: {job.company}\nRelevant requirements: {job.description[:3000]}\nDraft:\n{draft}")
     revision=await gemini().revise(prompt)
     return revision if revision and valid_revision(revision) else draft
+async def generated_letter(job: Job, use_ai: bool=True, regenerate: bool=False) -> tuple[str,str]:
+    """Cache the verified final letter on the job; Gemini is an optional editor."""
+    cached=(job.raw_metadata or {}).get('cover_letter')
+    if cached and not regenerate: return cached,(job.raw_metadata or {}).get('cover_letter_mode','TEMPLATE')
+    draft=cover_letter(job)
+    final=await revised_cover_letter(job) if use_ai else draft
+    mode='GEMINI' if use_ai and final!=draft else 'TEMPLATE'
+    return final,mode
 def valid_revision(letter: str) -> bool:
     """Reject common fabricated-credential claims; deterministic draft is always safe fallback."""
     lowered=letter.lower()

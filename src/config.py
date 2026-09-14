@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     discord_webhook_url: str | None = None
     discord_bot_token: str | None = None
     discord_bot_guild_id: str | None = None
+    discord_control_channel_id: str | None = None
     discord_motivation: str = ""
     discord_motivations_json: str = ""
     min_notify_score: int = 70
@@ -30,6 +31,8 @@ class Settings(BaseSettings):
     google_client_id: str | None = None
     google_client_secret: str | None = None
     profile_path: str = "data/master-profile.json"
+    resume_path: str | None = None
+    application_dry_run: bool = True
     ai_enabled: bool = False
     ai_provider: str | None = None
     ai_api_key: str | None = None
