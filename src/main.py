@@ -84,7 +84,7 @@ def health():
     except Exception as e: raise HTTPException(503,detail='database unavailable') from e
     with repo.sessions() as s:
         sources=s.scalars(select(SourceHealth)).all()
-    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_webhook_url),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
+    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_webhook_url),'discord_bot':repo.state('discord_bot_health',{'healthy':False}),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
 async def manual_scan():
     if poll_lock.locked(): raise HTTPException(409,'scan already running')
     previous=repo.state('manual_scan',{}) or {}; now=datetime.now(timezone.utc)
