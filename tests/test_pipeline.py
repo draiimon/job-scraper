@@ -104,7 +104,7 @@ def test_root_route_is_render_probe_friendly():
 async def test_brightdata_normalizes_and_caches_results():
     class Client:
         calls=0
-        async def scrape(self,*_):
+        async def scrape(self,*_,**__):
             self.calls+=1
             return [{'id':'1','title':'Junior Cloud Engineer','company':'Cloud PH','location':'Makati, Philippines','description':'AWS Docker','url':'https://example.com/job','date_posted':'2026-09-14T00:00:00+00:00'}]
     client=Client(); source=BrightDataJobs('linkedin_jobs','dataset',[{'keyword':'cloud'}],client)

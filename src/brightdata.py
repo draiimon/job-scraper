@@ -10,14 +10,26 @@ class BrightDataClient:
     base_url='https://api.brightdata.com/datasets/v3/scrape'
     def __init__(self, token:str, retries:int=3, timeout:float=30):
         self._token=token; self.retries=retries; self.timeout=timeout; self._cache={}
-    async def scrape(self,dataset_id:str,input_rows:list[dict],limit_per_input=None):
+    async def list_datasets(self):
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response=await client.get('https://api.brightdata.com/datasets/list',headers={'Authorization':f'Bearer {self._token}'})
+            if response.status_code in (401,403): raise SourceError(f'Bright Data authentication rejected ({response.status_code})')
+            response.raise_for_status()
+            data=response.json()
+            if not isinstance(data,list): raise SourceError('Bright Data returned an unsupported dataset catalog')
+            return data
+        except httpx.HTTPError as exc:
+            raise SourceError('Bright Data catalog request failed') from exc
+    async def scrape(self,dataset_id:str,input_rows:list[dict],limit_per_input=None,extra_params:dict|None=None):
         if not dataset_id or not input_rows: raise SourceError('Bright Data dataset ID and input rows are required')
         payload={'input':input_rows,'limit_per_input':limit_per_input}; key=hashlib.sha256((dataset_id+json.dumps(payload,sort_keys=True)).encode()).hexdigest()
         if key in self._cache: return self._cache[key]
         for attempt in range(self.retries+1):
             try:
+                params={'dataset_id':dataset_id,'notify':'false','include_errors':'true',**(extra_params or {})}
                 async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response=await client.post(self.base_url,params={'dataset_id':dataset_id,'notify':'false','include_errors':'true'},headers={'Authorization':f'Bearer {self._token}','Content-Type':'application/json'},json=payload)
+                    response=await client.post(self.base_url,params=params,headers={'Authorization':f'Bearer {self._token}','Content-Type':'application/json'},json=payload)
                 if response.is_success:
                     data=response.json(); self._cache[key]=data; return data
                 if response.status_code in (401,403): raise SourceError(f'Bright Data authentication rejected ({response.status_code})')
@@ -35,7 +47,8 @@ class BrightDataJobs(Source):
     def __init__(self,kind:str,dataset_id:str,inputs:list[dict],client:BrightDataClient):
         self.kind=kind; self.name=f'brightdata:{kind}'; self.dataset_id=dataset_id; self.inputs=inputs; self.client=client
     async def fetch(self):
-        data=await self.client.scrape(self.dataset_id,self.inputs)
+        discovery={'type':'discover_new','discover_by':'keyword'} if self.kind=='linkedin_jobs' else None
+        data=await self.client.scrape(self.dataset_id,self.inputs,extra_params=discovery)
         rows=data if isinstance(data,list) else data.get('data',data.get('results',[]))
         if not isinstance(rows,list): raise SourceError('Bright Data returned an unsupported response shape')
         return [self._normalize(row) for row in rows if isinstance(row,dict) and self._usable(row)]
