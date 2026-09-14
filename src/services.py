@@ -69,15 +69,9 @@ class Repository:
                     )
                     connection.exec_driver_sql('DROP TABLE app_state_legacy')
     def initialize_runtime_config(self, cfg: Settings) -> dict[str, str]:
-        """Create/load safe runtime settings and hydrate the process config.
-
-        Non-secret values live in app_settings. Browserless's bearer token is
-        migrated to Supabase Vault when that extension is available and is
-        never copied into a normal application table.
-        """
+        """Create/load safe runtime settings and hydrate the process config."""
         self.create_schema()
         defaults = {
-            'browserless_endpoint': 'https://production-sfo.browserless.io',
             'jobstreet_enabled': 'true',
             'jobstreet_base_url': 'https://ph.jobstreet.com',
             'jobstreet_login_url': '',
@@ -99,9 +93,6 @@ class Repository:
                 row.key: row.value
                 for row in session.scalars(select(AppSetting)).all()
             }
-        endpoint = str(values.get('browserless_endpoint') or '').strip()
-        if endpoint:
-            cfg.browserless_endpoint = endpoint
         enabled = str(values.get('jobstreet_enabled', 'true')).strip().lower()
         cfg.jobstreet_enabled = enabled not in {'0', 'false', 'no', 'off'}
         for key in (
@@ -123,14 +114,6 @@ class Repository:
                 setattr(cfg, key, int(values[key]))
             except (KeyError, TypeError, ValueError):
                 pass
-        vault_token = self._vault_secret('browserless_api_token')
-        # A deployment secret is the operator's current source of truth. A
-        # stale Vault value must not override a rotated/reconnected secret and
-        # cause Browserless to fail with an opaque 401.
-        if not cfg.browserless_api_token and vault_token:
-            cfg.browserless_api_token = vault_token
-        elif cfg.browserless_api_token and not vault_token:
-            self._vault_store_secret('browserless_api_token', cfg.browserless_api_token)
         return values
 
     def set_setting(self, key: str, value: str) -> None:
@@ -141,38 +124,6 @@ class Repository:
             else:
                 setting.value = str(value)
 
-    def _vault_secret(self, name: str) -> str | None:
-        if self.engine.dialect.name != 'postgresql':
-            return None
-        try:
-            with self.sessions() as session:
-                value = session.execute(
-                    text('SELECT secret FROM vault.decrypted_secrets WHERE name = :name LIMIT 1'),
-                    {'name': name},
-                ).scalar()
-            return str(value) if value else None
-        except Exception as exc:
-            log.info('vault_unavailable', extra={'error_type': type(exc).__name__})
-            return None
-
-    def _vault_store_secret(self, name: str, value: str) -> bool:
-        if self.engine.dialect.name != 'postgresql':
-            return False
-        try:
-            with self.sessions.begin() as session:
-                session.execute(
-                    text('SELECT vault.create_secret(:secret, :name, :description)'),
-                    {
-                        'secret': value,
-                        'name': name,
-                        'description': 'After Hours Job Hunter runtime secret',
-                    },
-                )
-            return True
-        except Exception as exc:
-            # Do not include the secret or provider response in logs.
-            log.info('vault_secret_migration_unavailable', extra={'secret_name': name, 'error_type': type(exc).__name__})
-            return False
     def save(self, item: NormalizedJob, score:int, reasons:list[str], warnings:list[str]) -> Job | None:
         with self.sessions() as s:
             existing=s.scalar(select(Job).where(Job.fingerprint==item.fingerprint))

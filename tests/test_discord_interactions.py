@@ -1,5 +1,6 @@
 import asyncio
 import time
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import discord
@@ -140,6 +141,7 @@ async def test_discord_controls_ack_during_slow_scan(monkeypatch, tmp_path):
                 raw_metadata={},
                 status="NEW",
                 notification_state="SENT",
+                    date_posted=datetime.now(timezone.utc),
             )
         )
         session.commit()
@@ -220,6 +222,22 @@ async def test_discord_controls_ack_during_slow_scan(monkeypatch, tmp_path):
         await view_all_task
         assert view_all_interaction.followup.sent
         assert view_all_interaction.followup.sent[0]["message"].embeds[0].title == "𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃"
+        view_all_edit = view_all_interaction.followup.sent[0]["message"].edits[-1]
+        assert view_all_edit["embed"].title == "𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃"
+        view_all_view = view_all_edit["view"]
+        view_all_apply = next(
+            child for child in view_all_view.children
+            if child.label.startswith("APPLY NOW")
+        )
+        view_all_apply_interaction = FakeInteraction()
+        view_all_apply_task = await assert_acknowledged(
+            view_all_apply.callback(view_all_apply_interaction),
+            view_all_apply_interaction,
+        )
+        await view_all_apply_task
+        assert view_all_apply_interaction.followup.sent
+        assert view_all_apply_interaction.followup.sent[0]["message"].embeds[0].title == "𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖"
+        assert "Junior DevOps Engineer" in view_all_apply_interaction.followup.sent[0]["message"].embeds[0].description
 
         class FakeTextChannel:
             def __init__(self):

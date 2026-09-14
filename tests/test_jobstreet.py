@@ -195,7 +195,10 @@ async def test_authenticated_source_discovers_normalized_listings(monkeypatch, t
     assert len(jobs) == 1
     assert jobs[0].title == "Cloud Support Engineer"
     assert "keywords=Cloud" in page.actions[0][1]
-    assert playwright_context.browser.launch_options == {"headless": True}
+    assert playwright_context.browser.launch_options == {
+        "headless": True,
+        "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+    }
 
 
 @pytest.mark.asyncio

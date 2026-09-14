@@ -12,7 +12,12 @@ from urllib.parse import quote_plus, urlparse
 
 from .config import Settings
 from .jobs import NormalizedJob
-from .jobstreet_link import connection_status, has_managed_connection, restore_latest_session
+from .jobstreet_link import (
+    connection_status,
+    has_managed_connection,
+    refresh_latest_session,
+    restore_latest_session,
+)
 from .sources import Source, SourceError
 
 log = logging.getLogger(__name__)
@@ -343,7 +348,10 @@ class JobStreetBrowserSource(Source):
         jobs: list[NormalizedJob] = []
         try:
             async with async_playwright() as playwright:
-                browser = await playwright.chromium.launch(headless=True)
+                browser = await playwright.chromium.launch(
+                    headless=True,
+                    args=["--no-sandbox", "--disable-dev-shm-usage"],
+                )
                 context = await browser.new_context(storage_state=str(runtime_state if linked_state else session_path(self.cfg)))
                 page = await context.new_page()
                 try:
@@ -373,6 +381,11 @@ class JobStreetBrowserSource(Source):
                                 break
                         if len(jobs) >= self.cfg.jobstreet_max_results:
                             break
+                    if self.repo is not None and linked_state:
+                        refreshed_state = await context.storage_state()
+                        await asyncio.to_thread(
+                            refresh_latest_session, self.cfg, self.repo, refreshed_state
+                        )
                 finally:
                     await context.close()
                     await browser.close()

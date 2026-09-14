@@ -44,18 +44,18 @@ LinkedIn is optional and is used only when Bright Data is enabled, authenticated
 
 JobStreet is optional and is linked from Discord with `v!jobstreet`. The
 `CONNECT JOBSTREET` action creates a signed, short-lived, one-time private URL.
-The setup page opens a Browserless interactive browser; the user completes
-Google/JobStreet sign-in, 2FA, consent, or CAPTCHA manually. The verified
-Playwright state is encrypted before it is stored in `source_connections`.
-`CHECK CONNECTION`, `REAUTHENTICATE`, and `DISCONNECT` are available from the
-same control panel. Automatic scans and `v!search` include JobStreet only while
-the stored connection is `READY`; public ATS sources continue if it fails.
+The setup page downloads a temporary Windows connector. Running it opens local
+Playwright Chromium and keeps it open while the user completes Google/JobStreet
+sign-in, 2FA, consent, or CAPTCHA manually. The connector uploads only the
+resulting Playwright storage state; the server encrypts it before storing it in
+`source_connections`. `CHECK CONNECTION`, `REAUTHENTICATE`, and `DISCONNECT`
+are available from the same control panel. Automatic scans and `v!search`
+include JobStreet only while the stored connection is `READY`; public ATS
+sources continue if it fails.
 
-Non-secret Browserless and JobStreet runtime settings are initialized
-idempotently in `app_settings`, including the safe Browserless endpoint,
-enabled flag, search terms, and timeouts. `BROWSERLESS_API_TOKEN` is a
-bootstrap secret and is stored/read through Supabase Vault when available; it
-is never printed or stored in `app_settings`. JobStreet session encryption is
+JobStreet runtime settings are initialized idempotently in `app_settings`,
+including the enabled flag, search terms, and timeouts. There is no Browserless
+dependency or Browserless secret. JobStreet session encryption is
 deterministically derived with domain separation from `APP_SECRET_KEY`, which
 must remain a deployment secret. There is no separate encryption-key
 environment variable and no random key on restart. `JOBSTREET_SESSION_STATE_B64`
@@ -81,10 +81,10 @@ Copy `.env.example`; never commit values. Important bootstrap names include
 `DATABASE_URL`, `DISCORD_BOT_TOKEN`, `DISCORD_CONTROL_CHANNEL_ID`,
 `DISCORD_WEBHOOK_URL`, `DISCORD_ALERT_ROLE_ID`, `POLLING_ENABLED`,
 `POLL_INTERVAL_SECONDS`, `SOURCE_TARGETS_JSON`, `SOURCE_CONFIG_PATH`,
-`APP_SECRET_KEY`, `PUBLIC_BASE_URL`, `BROWSERLESS_API_TOKEN`,
-`APPLICATION_DRY_RUN`, Gemini variables, Bright Data variables, and the
+`APP_SECRET_KEY`, `PUBLIC_BASE_URL`, `APPLICATION_DRY_RUN`, Gemini variables,
+Bright Data variables, and the
 legacy `JOBSTREET_SESSION_PATH` / `JOBSTREET_SESSION_STATE_B64` fallback.
-Managed Browserless and JobStreet settings live in `app_settings`.
+Managed JobStreet settings live in `app_settings`.
 
 ## Verification and deployment
 
@@ -113,10 +113,13 @@ Render needs an external PostgreSQL/Supabase `DATABASE_URL`, bot token, control 
 - Tests: 76 passed (one third-party Python 3.12 `audioop` deprecation warning)
 - Live startup scan: 27 sources loaded, 27 attempted, 27 successful, 5,101 raw/normalized jobs, 4,318 within 0–90 days, 242 computer-related, 165 entry-compatible, and 865 duplicates removed.
 - Live database compatibility: `app_state.value` is `TEXT` in the deployment database; scheduler counters persisted and read back after restart without data loss. The SQLite legacy-schema migration is idempotent and preserves payloads over 500 characters.
-- Live signed JobStreet handoff: the current deployment credential authenticated Browserless, CDP connected, JobStreet loaded, a usable live-browser URL was produced, and the session stopped at `WAITING FOR USER LOGIN` pending manual Google/2FA/CAPTCHA completion. A stale Vault value did not override the deployment credential.
+- Direct Playwright Chromium is installed in the Render image with its Linux
+  dependencies. JobStreet scans restore the encrypted session into private
+  ephemeral storage, run headless Chromium with container-safe flags, refresh
+  the stored state, and remove the temporary file after the scan.
 - Live targeted searches: software engineer returned 2 qualifying results, developer 2, DevOps 1, and IT Support 5. Query relevance was counted before profile scoring; software-family titles were returned before infrastructure-only suggestions. A LinkedIn failure was isolated and reported without blocking ATS results.
 - Live stored job board: `v!viewall` and `v!view all` both use the stored paginated board; the deployment database contained 26 active 0–90 day stored matches during verification.
 - Final release commit: current `main` HEAD (see `git log -1 --oneline`)
 - Included finalization: Discord-first controls, database/Vault-backed
-  JobStreet linking, visual gallery, date-sorted job table/export/timeline,
+  JobStreet local connector linking, direct Render Chromium scanning, visual gallery, date-sorted job table/export/timeline,
   role-alert safeguards, and targeted-search regression tests.

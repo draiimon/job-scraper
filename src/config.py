@@ -67,12 +67,6 @@ class Settings(BaseSettings):
     # Optional Render secret: base64-encoded Playwright storage state created
     # locally through `python -m src.jobstreet_auth`. Never log this value.
     jobstreet_session_state_b64: str | None = None
-    # Preferred Bloxlink-style connection flow. These values belong only in
-    # Render secrets; the legacy base64 session remains a temporary fallback.
-    browserless_api_token: str | None = None
-    # Browserless Cloud's documented regional endpoint. The database may
-    # override this at startup; no endpoint is required in a local .env.
-    browserless_endpoint: str = "https://production-sfo.browserless.io"
     jobstreet_enabled: bool = True
     jobstreet_base_url: str = "https://ph.jobstreet.com"
     jobstreet_login_url: str = ""

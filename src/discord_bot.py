@@ -238,6 +238,19 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         async def back(self,interaction,button): await interaction.response.send_message(embed=styled_embed('𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖','Return to the private review above.'),ephemeral=True)
         @discord.ui.button(label='CANCEL',style=discord.ButtonStyle.secondary)
         async def cancel(self,interaction,button): await interaction.response.send_message('Send cancelled.',ephemeral=True)
+    async def send_application_review(interaction, job_id):
+        job,_,mode=await prepare_letter(job_id,True)
+        if not job:
+            await interaction.followup.send('This job is no longer available.',ephemeral=True)
+            return
+        embed=styled_embed('𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖',f'**{job.title}**\n{job.company}')
+        embed.add_field(name='𝐌𝐀𝐓𝐂𝐇',value=f'{job.score}% MATCH',inline=True)
+        stored_resume=await asyncio.to_thread(repo.resume_info)
+        embed.add_field(name='𝐑𝐄𝐒𝐔𝐌𝐄',value='READY' if stored_resume or (cfg.resume_path and Path(cfg.resume_path).exists()) else 'NOT CONFIGURED',inline=True)
+        embed.add_field(name='𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑',value=f'READY ({mode})',inline=True)
+        embed.add_field(name='𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐌𝐄𝐓𝐇𝐎𝐃',value=application_method(job),inline=True)
+        embed.add_field(name='𝐒𝐀𝐅𝐄𝐓𝐘',value='DRY RUN ON' if cfg.application_dry_run else 'MANUAL REVIEW REQUIRED',inline=False)
+        await interaction.followup.send(embed=embed,view=ReviewView(job_id),ephemeral=True)
     class JobView(discord.ui.View):
         def __init__(self, job):
             super().__init__(timeout=900); self.job_id=job.id
@@ -245,16 +258,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         @discord.ui.button(label='APPLY NOW',style=discord.ButtonStyle.primary)
         async def apply(self,interaction,button):
             await interaction.response.defer(ephemeral=True,thinking=True)
-            job,_,mode=await prepare_letter(self.job_id,True)
-            if not job: await interaction.followup.send('This job is no longer available.',ephemeral=True); return
-            embed=styled_embed('𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖',f'**{job.title}**\n{job.company}')
-            embed.add_field(name='𝐌𝐀𝐓𝐂𝐇',value=f'{job.score}% MATCH',inline=True)
-            stored_resume=await asyncio.to_thread(repo.resume_info)
-            embed.add_field(name='𝐑𝐄𝐒𝐔𝐌𝐄',value='READY' if stored_resume or (cfg.resume_path and Path(cfg.resume_path).exists()) else 'NOT CONFIGURED',inline=True)
-            embed.add_field(name='𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑',value=f'READY ({mode})',inline=True)
-            embed.add_field(name='𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐌𝐄𝐓𝐇𝐎𝐃',value=application_method(job),inline=True)
-            embed.add_field(name='𝐒𝐀𝐅𝐄𝐓𝐘',value='DRY RUN ON' if cfg.application_dry_run else 'MANUAL REVIEW REQUIRED',inline=False)
-            await interaction.followup.send(embed=embed,view=ReviewView(self.job_id),ephemeral=True)
+            await send_application_review(interaction,self.job_id)
         @discord.ui.button(label='SAVE',style=discord.ButtonStyle.secondary)
         async def save(self,interaction,button):
             from .models import Job
@@ -337,6 +341,13 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             inline=False,
         )
         return embed,pages
+    class ViewAllApplyButton(discord.ui.Button):
+        def __init__(self,job_id,index):
+            super().__init__(label=f'APPLY NOW {index:02}',style=discord.ButtonStyle.primary,row=2)
+            self.job_id=job_id
+        async def callback(self,interaction):
+            await interaction.response.defer(ephemeral=True,thinking=True)
+            await send_application_review(interaction,self.job_id)
     class ViewAllJobsView(discord.ui.View):
         def __init__(self,jobs,page=0,total_pages=1):
             super().__init__(timeout=900); self.page=page; self.total_pages=total_pages
@@ -344,6 +355,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 url=job.application_url or job.url
                 if url and url.startswith(('https://','http://')):
                     self.add_item(discord.ui.Button(label=f'OPEN {index:02}',style=discord.ButtonStyle.link,url=url,row=1))
+                self.add_item(ViewAllApplyButton(job.id,index))
             self._sync()
         def _sync(self):
             self.previous.disabled=self.page<=0
@@ -468,9 +480,10 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         return embed
 
     async def send_jobstreet_link(interaction, user_id):
-        from .jobstreet_link import browserless_ready, create_request
-        # A database write and Browserless setup must happen after Discord's
-        # three-second acknowledgement window, just like scan/search work.
+        from .jobstreet_link import create_request
+        # The database write happens after Discord's three-second acknowledgement
+        # window, just like scan/search work. Chromium itself runs on the
+        # Windows PC that downloads the temporary connector.
         await interaction.response.defer(ephemeral=True, thinking=True)
         if not cfg.public_base_url:
             await interaction.followup.send(
@@ -479,21 +492,15 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 ephemeral=True,
             )
             return
-        if not browserless_ready(cfg):
-            await interaction.followup.send(
-                embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄',
-                                   'The private Browserless connection service is not configured yet.'),
-                ephemeral=True,
-            )
-            return
-        token=await asyncio.to_thread(create_request,repo,user_id)
+        token=await asyncio.to_thread(create_request,repo,user_id,600,cfg.app_secret_key)
         url=f'{cfg.public_base_url.rstrip("/")}/connect/jobstreet/{token}'
         embed=styled_embed(
-            '𝐏𝐑𝐈𝐕𝐀𝐓𝐄 𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐒𝐄𝐓𝐔𝐏',
-            'Open the private setup link, then complete Google sign-in and any security challenges yourself.',
+            '𝐂𝐎𝐍𝐍𝐄𝐂𝐓 𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓',
+            'Open the private setup link on the Windows PC where you want to authenticate. '
+            'Download and run the connector; it opens local Playwright Chromium automatically.',
         )
-        embed.add_field(name='𝐒𝐄𝐓𝐔𝐏 𝐋𝐈𝐍𝐊',value=f'[OPEN PRIVATE SETUP]({url})',inline=False)
-        embed.add_field(name='𝐄𝐗𝐏𝐈𝐑𝐘',value='This one-time link expires in 10 minutes.',inline=False)
+        embed.add_field(name='𝐒𝐄𝐓𝐔𝐏 𝐋𝐈𝐍𝐊',value=f'COPY THIS URL INTO YOUR BROWSER:\n{url}',inline=False)
+        embed.add_field(name='𝐄𝐗𝐏𝐈𝐑𝐘',value='This signed one-time link expires in 10 minutes.',inline=False)
         await interaction.followup.send(embed=embed,ephemeral=True)
 
     class JobStreetView(discord.ui.View):
@@ -512,10 +519,9 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await send_jobstreet_link(interaction,interaction.user.id)
         @discord.ui.button(label='DISCONNECT',style=discord.ButtonStyle.danger,custom_id='jobhunter:jobstreet-disconnect')
         async def disconnect_source(self,interaction,button):
-            from .jobstreet_link import cancel_interactive_sessions, disconnect
+            from .jobstreet_link import disconnect
             await interaction.response.defer(ephemeral=True,thinking=True)
             removed=await asyncio.to_thread(disconnect,repo,interaction.user.id)
-            cancel_interactive_sessions(interaction.user.id)
             message='The encrypted JobStreet session was removed.' if removed else 'No saved JobStreet session was found.'
             await interaction.followup.send(embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐃𝐈𝐒𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐄𝐃',message),ephemeral=True)
     class SearchModal(discord.ui.Modal,title='Find recent jobs'):
