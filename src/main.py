@@ -62,7 +62,13 @@ async def poll_once(manual=False):
         semaphore=asyncio.Semaphore(cfg.scan_source_concurrency)
         async def limited(source):
             async with semaphore:
-                timeout = cfg.jobstreet_scan_timeout_seconds if source.name == 'jobstreet:google-session' else cfg.scan_source_timeout_seconds
+                timeout = (
+                    cfg.jobstreet_scan_timeout_seconds
+                    if source.name == 'jobstreet:google-session'
+                    else cfg.brightdata_linkedin_scan_timeout_seconds
+                    if source.name == 'brightdata:linkedin_jobs'
+                    else cfg.scan_source_timeout_seconds
+                )
                 try: return await asyncio.wait_for(pipeline.run_source(source),timeout=timeout)
                 except asyncio.TimeoutError:
                     repo.health_failure(source.name,'scan source timeout')

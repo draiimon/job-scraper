@@ -162,7 +162,9 @@ class Repository:
     def health_failure(self, source, error):
         with self.sessions() as s:
             item=s.get(SourceHealth,source) or SourceHealth(source=source); s.add(item)
-            item.last_checked_at=datetime.now(timezone.utc); item.consecutive_failures+=1; item.last_error=error; item.status='unhealthy'; s.commit()
+            item.last_checked_at=datetime.now(timezone.utc)
+            item.consecutive_failures=(item.consecutive_failures or 0)+1
+            item.last_error=error; item.status='unhealthy'; s.commit()
     def reserve_baseline_alert(self, limit=5):
         with self.sessions() as s:
             state=s.get(AppState,'baseline_alert_count')

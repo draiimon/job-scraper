@@ -6,7 +6,7 @@ from src.services import Pipeline, Repository
 from src.applications import cover_letter, eligible_for_email
 from src.email_alerts import alert_to_job
 from src.services import Discord
-from src.models import Job
+from src.models import Job, SourceHealth
 from src.ai import GeminiManager, KeyState
 from src.security import ActionTokens
 from src.applications import valid_revision
@@ -177,6 +177,14 @@ def test_jobstreet_page_load_budget_is_separate_and_hard_capped(tmp_path):
     assert not repo.reserve_brightdata_page_loads('jobstreet',2,3)
     # A JobStreet page-load stop must not consume or block another source.
     assert repo.reserve_brightdata_page_loads('linkedin_jobs',3,3)
+
+def test_health_failure_handles_legacy_null_failure_counter(tmp_path):
+    repo=Repository(f'sqlite:///{tmp_path}/health.db'); repo.create_schema()
+    with repo.sessions() as session:
+        session.add(SourceHealth(source='brightdata:linkedin_jobs',consecutive_failures=None))
+        session.commit()
+    repo.health_failure('brightdata:linkedin_jobs','scan source timeout')
+    assert repo.health('brightdata:linkedin_jobs').consecutive_failures == 1
 
 def test_new_source_id_with_newer_timestamp_is_a_repost(tmp_path):
     repo=Repository(f'sqlite:///{tmp_path}/repost.db'); repo.create_schema()
