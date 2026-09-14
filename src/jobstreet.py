@@ -12,7 +12,7 @@ from urllib.parse import quote_plus, urlparse
 
 from .config import Settings
 from .jobs import NormalizedJob
-from .jobstreet_link import connection_status, restore_latest_session
+from .jobstreet_link import connection_status, has_managed_connection, restore_latest_session
 from .sources import Source, SourceError
 
 log = logging.getLogger(__name__)
@@ -379,8 +379,16 @@ class JobStreetBrowserSource(Source):
 
 
 def jobstreet_sources(cfg: Settings, repo=None) -> list[Source]:
+    if not getattr(cfg, 'jobstreet_enabled', True):
+        return []
     if repo is not None and connection_status(cfg, repo) == "READY":
         return [JobStreetBrowserSource(cfg, repo)]
+    # Once the managed flow has been used, do not silently fall back to an
+    # older local/Render session after the user disconnects or needs reauth.
+    # The base64 state remains supported for deployments that have never used
+    # the managed flow.
+    if repo is not None and has_managed_connection(repo):
+        return []
     if not ensure_storage_state(cfg):
         return []
     return [JobStreetBrowserSource(cfg, repo)]

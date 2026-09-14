@@ -10,7 +10,12 @@ from sqlalchemy import func, select
 from .config import settings
 from .jobs import NormalizedJob
 from .models import Job, JobStatus, SourceRun, SourceHealth, JobEvent
-from .jobstreet_link import browserless_ready, request_for_token
+from .jobstreet_link import (
+    browserless_ready,
+    interactive_session_for_request,
+    request_for_token,
+    start_interactive_session,
+)
 from .services import Pipeline, Repository
 from .sources import configured_sources
 from .applications import eligible_for_email, write_package, revised_cover_letter
@@ -97,7 +102,7 @@ def discord_task_done(task):
         logging.warning('discord_bot_stopped')
 @asynccontextmanager
 async def lifespan(app):
-    repo.create_schema(); repo.expire_stale_jobs()
+    repo.initialize_runtime_config(cfg); repo.expire_stale_jobs()
     try:
         if cfg.discord_bot_token: await pipeline.discord.remove_webhook_control_panel(repo)
         else: await pipeline.discord.update_status(repo,scheduler_snapshot())
@@ -124,16 +129,89 @@ def favicon():
 def jobstreet_connect_page(token: str):
     request = request_for_token(repo, token)
     if not request:
+        request = request_for_token(repo, token, include_used=True)
+    if not request:
         raise HTTPException(403, 'invalid, expired, or already-used connection link')
+    session = interactive_session_for_request(request)
+    if session and session.live_url:
+        return HTMLResponse(_jobstreet_live_page(token, session.live_url, session.status, session.error))
+    if request.used_at:
+        if request.status == "COMPLETE":
+            return HTMLResponse(_jobstreet_complete_page("JobStreet is connected and ready."))
+        if request.status == "ERROR":
+            return HTMLResponse(_jobstreet_complete_page("The private browser session did not complete. Start a new connection from Discord."))
+        return HTMLResponse(_jobstreet_complete_page("Your private browser session is starting. Refresh this page in a moment."))
     state = 'Ready to start a private browser session.' if browserless_ready(cfg) else 'Browserless is not configured yet. Ask the administrator to add the required private service secrets.'
     return HTMLResponse(
         '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
         '<title>Connect JobStreet</title><main style="max-width:42rem;margin:3rem auto;font:16px system-ui;color:#222">'
-        '<h1>Connect JobStreet</h1><p>Waiting for authentication.</p>'
+        '<h1>Connect JobStreet</h1><p>Start a private browser session to connect JobStreet.</p>'
         '<p>You will sign in directly inside a temporary browser session. This service never asks for your Google password, 2FA code, or CAPTCHA response.</p>'
         f'<p><strong>Status:</strong> {escape(state)}</p>'
-        '<p>This short-lived link is private. Do not share it.</p></main>'
+        '<p>This short-lived link is private. Do not share it.</p>'
+        '<form method="post"><button type="submit" '
+        f'{"disabled" if not browserless_ready(cfg) else ""}>START PRIVATE BROWSER</button></form></main>'
     )
+
+def _jobstreet_complete_page(message: str) -> str:
+    return (
+        '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>JobStreet connection</title><main style="max-width:42rem;margin:3rem auto;font:16px system-ui;color:#222">'
+        f'<h1>JobStreet connection</h1><p>{escape(message)}</p>'
+        '<p>You can close this tab and return to Discord.</p></main>'
+    )
+
+def _jobstreet_live_page(token: str, live_url: str, status: str, error: str | None = None) -> str:
+    if status == "READY":
+        return _jobstreet_complete_page("JobStreet is connected and ready.")
+    if status == "ERROR":
+        return _jobstreet_complete_page(error or "The private browser session did not complete.")
+    return (
+        '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Connect JobStreet</title><main style="max-width:42rem;margin:3rem auto;font:16px system-ui;color:#222">'
+        '<h1>Connect JobStreet</h1><p>Open the private browser below and complete JobStreet authentication manually.</p>'
+        '<p>Use Continue with Google, and complete any 2FA, security prompts, consent, or CAPTCHA yourself. '
+        'The service never receives your Google password or challenge answers.</p>'
+        f'<p><a href="{escape(live_url, quote=True)}" target="_blank" rel="noopener noreferrer">OPEN PRIVATE BROWSER</a></p>'
+        '<p>When authentication is complete, close the Browserless browser tab. This page will update automatically.</p>'
+        f'<p id="status">Status: {escape(status)}</p>'
+        f'''<script>
+        const poll = async () => {{
+          try {{
+            const response = await fetch('/connect/jobstreet/{escape(token, quote=True)}/status');
+            const data = await response.json();
+            document.getElementById('status').textContent = 'Status: ' + data.status;
+            if (data.status === 'READY' || data.status === 'ERROR') {{
+              window.location.reload();
+              return;
+            }}
+          }} catch (_) {{}}
+          setTimeout(poll, 2000);
+        }};
+        poll();
+        </script></main>'''
+    )
+
+@app.post('/connect/jobstreet/{token}', response_class=HTMLResponse)
+async def start_jobstreet_connection(token: str):
+    if not browserless_ready(cfg):
+        raise HTTPException(503, 'JobStreet connection is not configured on this service')
+    request = request_for_token(repo, token, consume=True)
+    if not request:
+        raise HTTPException(403, 'invalid, expired, or already-used connection link')
+    session = await start_interactive_session(cfg, repo, request)
+    if session.status == "ERROR":
+        return HTMLResponse(_jobstreet_complete_page(session.error or "The private browser session did not complete."), status_code=502)
+    return HTMLResponse(_jobstreet_live_page(token, session.live_url or "", session.status, session.error))
+
+@app.get('/connect/jobstreet/{token}/status')
+def jobstreet_connection_status(token: str):
+    request = request_for_token(repo, token, include_used=True)
+    if not request:
+        raise HTTPException(403, 'invalid, expired, or already-used connection link')
+    session = interactive_session_for_request(request)
+    status = session.status if session else request.status
+    return {'status': status, 'error': session.error if session else None}
 
 def resume_upload_link():
     token=ActionTokens(cfg).issue_control('resume')

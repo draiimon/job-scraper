@@ -10,6 +10,9 @@ import json
 import os
 import secrets
 import base64
+import asyncio
+import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -21,6 +24,7 @@ from .config import Settings
 from .models import SourceConnection, SourceConnectionRequest
 
 SOURCE = "jobstreet"
+log = logging.getLogger(__name__)
 
 
 class ConnectionError(RuntimeError):
@@ -36,18 +40,16 @@ def _digest(token: str) -> str:
 
 
 def _fernet(cfg: Settings) -> Fernet:
-    configured = (cfg.jobstreet_session_encryption_key or "").encode("ascii")
-    # A dedicated key is supported, but requiring another manually managed
-    # secret is unnecessary when the existing application secret is present.
-    # Never store this derived key in the database with the ciphertext.
-    value = configured
-    if not value and cfg.app_secret_key:
-        material = hashlib.sha256(
-            b"after-hours-jobstreet-session-v1\x00" + cfg.app_secret_key.encode("utf-8")
-        ).digest()
-        value = base64.urlsafe_b64encode(material)
-    if not value:
-        raise ConnectionError("Set APP_SECRET_KEY or JOBSTREET_SESSION_ENCRYPTION_KEY before connecting JobStreet.")
+    # The application secret is the only operator-managed secret for this
+    # feature.  Domain separation keeps this ciphertext key independent from
+    # any other use of APP_SECRET_KEY, while avoiding a second secret that can
+    # drift out of sync across instances.
+    if not cfg.app_secret_key:
+        raise ConnectionError("Set APP_SECRET_KEY before connecting JobStreet.")
+    material = hashlib.sha256(
+        b"after-hours-jobstreet-session-v1\x00" + cfg.app_secret_key.encode("utf-8")
+    ).digest()
+    value = base64.urlsafe_b64encode(material)
     try:
         return Fernet(value)
     except (ValueError, TypeError) as exc:
@@ -55,7 +57,7 @@ def _fernet(cfg: Settings) -> Fernet:
 
 
 def browserless_ready(cfg: Settings) -> bool:
-    return bool(cfg.browserless_api_token and cfg.browserless_endpoint and (cfg.jobstreet_session_encryption_key or cfg.app_secret_key))
+    return bool(cfg.browserless_api_token and cfg.browserless_endpoint and cfg.app_secret_key)
 
 
 def create_request(repo, discord_user_id: int | str, ttl_seconds: int = 600) -> str:
@@ -69,14 +71,16 @@ def create_request(repo, discord_user_id: int | str, ttl_seconds: int = 600) -> 
     return token
 
 
-def request_for_token(repo, token: str, consume: bool = False) -> SourceConnectionRequest | None:
+def request_for_token(
+    repo, token: str, consume: bool = False, include_used: bool = False
+) -> SourceConnectionRequest | None:
     with repo.sessions.begin() as session:
         request = session.scalar(select(SourceConnectionRequest).where(
             SourceConnectionRequest.source == SOURCE,
             SourceConnectionRequest.token_digest == _digest(token),
         ))
         expires = request.expires_at.replace(tzinfo=timezone.utc) if request and request.expires_at.tzinfo is None else (request.expires_at if request else None)
-        if not request or request.used_at or expires <= _now():
+        if not request or (request.used_at and not include_used) or expires <= _now():
             return None
         if consume:
             request.used_at = _now(); request.status = "USED"
@@ -109,6 +113,9 @@ def save_verified_session(cfg: Settings, repo, discord_user_id: int | str, stora
         record.status = "READY"; record.encrypted_session = ciphertext
         record.connected_at = record.connected_at or now; record.last_verified_at = now
         record.updated_at = now; record.last_error = None
+    if hasattr(repo, "set_setting"):
+        repo.set_setting("jobstreet_last_verified", now.isoformat())
+        repo.set_setting("jobstreet_status", "READY")
 
 
 def restore_latest_session(cfg: Settings, repo, destination: Path) -> bool:
@@ -142,8 +149,13 @@ def mark_status(repo, discord_user_id: int | str | None, status: str, error: str
         if discord_user_id is not None:
             query = query.where(SourceConnection.discord_user_id == str(discord_user_id))
         records = session.scalars(query).all()
+        if discord_user_id is not None and not records:
+            records = [SourceConnection(discord_user_id=str(discord_user_id), source=SOURCE)]
+            session.add(records[0])
         for record in records:
             record.status = status; record.updated_at = _now(); record.last_error = error
+    if hasattr(repo, "set_setting"):
+        repo.set_setting("jobstreet_status", status)
 
 
 def disconnect(repo, discord_user_id: int | str) -> bool:
@@ -168,3 +180,134 @@ def browserless_cdp_endpoint(cfg: Settings) -> str:
         base = "ws://" + base.removeprefix("http://")
     separator = "&" if "?" in base else "?"
     return f"{base}{separator}token={quote_plus(str(cfg.browserless_api_token))}"
+
+
+@dataclass
+class InteractiveSession:
+    """Process-local state for one private Browserless live session.
+
+    The live URL is intentionally not persisted. Browserless returns a
+    one-time URL without the API token, and the signed setup link is the only
+    way the application exposes it to the requesting Discord user.
+    """
+
+    nonce: str
+    discord_user_id: str
+    status: str = "STARTING"
+    live_url: str | None = None
+    error: str | None = None
+    ready: asyncio.Event = field(default_factory=asyncio.Event)
+    task: asyncio.Task | None = None
+
+
+_interactive_sessions: dict[str, InteractiveSession] = {}
+
+
+def _request_status(repo, nonce: str, status: str) -> None:
+    with repo.sessions.begin() as session:
+        request = session.scalar(select(SourceConnectionRequest).where(
+            SourceConnectionRequest.nonce == nonce,
+            SourceConnectionRequest.source == SOURCE,
+        ))
+        if request:
+            request.status = status
+
+
+def _safe_session_error(exc: Exception) -> str:
+    """Return a user-safe error without copying Browserless URLs or secrets."""
+    if isinstance(exc, TimeoutError):
+        return "The private browser session timed out before authentication finished."
+    if isinstance(exc, ConnectionError):
+        return str(exc)
+    return "The private browser session could not be completed."
+
+
+async def _run_interactive_session(cfg: Settings, repo, session: InteractiveSession) -> None:
+    browser = None
+    try:
+        from playwright.async_api import async_playwright
+        from .jobstreet import _is_authenticated
+
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.connect_over_cdp(browserless_cdp_endpoint(cfg))
+            contexts = browser.contexts
+            context = contexts[0] if contexts else await browser.new_context()
+            page = await context.new_page()
+            login_url = cfg.jobstreet_login_url or f"{cfg.jobstreet_base_url.rstrip('/')}/login"
+            await page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
+
+            cdp = await context.new_cdp_session(page)
+            response = await cdp.send(
+                "Browserless.liveURL",
+                {"quality": 70, "showBrowserInterface": True},
+            )
+            session.live_url = str(response.get("liveURL") or "")
+            if not session.live_url:
+                raise RuntimeError("Browserless did not return a live URL.")
+            session.status = "WAITING_FOR_USER"
+            session.ready.set()
+            _request_status(repo, session.nonce, "RUNNING")
+
+            deadline = asyncio.get_running_loop().time() + cfg.jobstreet_auth_timeout_seconds
+            while asyncio.get_running_loop().time() < deadline:
+                if await _is_authenticated(page):
+                    state = await context.storage_state()
+                    save_verified_session(cfg, repo, session.discord_user_id, state)
+                    _request_status(repo, session.nonce, "COMPLETE")
+                    session.status = "READY"
+                    session.ready.set()
+                    return
+                await page.wait_for_timeout(1_500)
+            raise TimeoutError
+    except Exception as exc:
+        session.status = "ERROR"
+        session.error = _safe_session_error(exc)
+        session.ready.set()
+        _request_status(repo, session.nonce, "ERROR")
+        mark_status(repo, session.discord_user_id, "AUTH REQUIRED", session.error)
+        # Do not log exception text: Playwright/Browserless errors can echo a
+        # connection URL or a provider response containing sensitive data.
+        log.warning("jobstreet_browser_session_failed", extra={"error_type": type(exc).__name__})
+    finally:
+        if browser is not None:
+            try:
+                await browser.close()
+            except Exception:
+                pass
+
+
+async def start_interactive_session(cfg: Settings, repo, request: SourceConnectionRequest) -> InteractiveSession:
+    """Start Browserless and return after a private live URL is available."""
+    if not browserless_ready(cfg):
+        raise ConnectionError("JobStreet connection is not configured on this service.")
+    existing = _interactive_sessions.get(request.nonce)
+    if existing:
+        await existing.ready.wait()
+        return existing
+    session = InteractiveSession(request.nonce, request.discord_user_id)
+    _interactive_sessions[request.nonce] = session
+    mark_status(repo, request.discord_user_id, "CONNECTING")
+    session.task = asyncio.create_task(_run_interactive_session(cfg, repo, session))
+    await session.ready.wait()
+    return session
+
+
+def interactive_session_for_request(request: SourceConnectionRequest) -> InteractiveSession | None:
+    return _interactive_sessions.get(request.nonce)
+
+
+def has_managed_connection(repo, discord_user_id: int | str | None = None) -> bool:
+    with repo.sessions() as session:
+        query = select(SourceConnection.id).where(SourceConnection.source == SOURCE)
+        if discord_user_id is not None:
+            query = query.where(SourceConnection.discord_user_id == str(discord_user_id))
+        return session.scalar(query.limit(1)) is not None
+
+
+def cancel_interactive_sessions(discord_user_id: int | str) -> None:
+    for session in list(_interactive_sessions.values()):
+        if session.discord_user_id != str(discord_user_id):
+            continue
+        if session.task and not session.task.done():
+            session.task.cancel()
+        _interactive_sessions.pop(session.nonce, None)

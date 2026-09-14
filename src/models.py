@@ -54,6 +54,12 @@ class AppState(Base):
     __tablename__='app_state'
     key: Mapped[str] = mapped_column(String(100),primary_key=True)
     value: Mapped[str] = mapped_column(String(500),default='')
+class AppSetting(Base):
+    """Non-secret runtime configuration loaded after database startup."""
+    __tablename__='app_settings'
+    key: Mapped[str] = mapped_column(String(100),primary_key=True)
+    value: Mapped[str] = mapped_column(Text,default='')
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True),default=now,onupdate=now)
 class JobEvent(Base):
     """Small immutable activity timeline for the private application tracker."""
     __tablename__='job_events'

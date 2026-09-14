@@ -1,8 +1,6 @@
 import json
 from pathlib import Path
 
-from cryptography.fernet import Fernet
-
 from src.config import Settings
 from src.jobstreet_link import (
     connection_status, create_request, disconnect, request_for_token,
@@ -14,7 +12,7 @@ from src.services import Repository
 def configured(tmp_path):
     return Settings(
         database_url=f"sqlite:///{tmp_path}/links.db",
-        jobstreet_session_encryption_key=Fernet.generate_key().decode(),
+        app_secret_key="test-app-secret",
     )
 
 

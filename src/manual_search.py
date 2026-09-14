@@ -12,6 +12,8 @@ from .brightdata import BrightDataClient, BrightDataJobs
 from .config import Settings
 from .jobs import NormalizedJob, evaluate, freshness, is_ph_location
 from .sources import SourceError, configured_sources
+from .jobstreet import jobstreet_sources
+from .jobstreet_link import connection_status, has_managed_connection
 
 
 ProgressCallback = Callable[["SearchProgress"], Awaitable[None]]
@@ -184,6 +186,16 @@ class ManualJobSearch:
         # responsible for the complete source set; a Discord query must not
         # make the user wait through every configured board.
         ats = [] if source_filter in ("linkedin", "brightdata_linkedin", "jobstreet") else configured_sources(self.cfg.source_targets)[:8]
+        jobstreet = []
+        if source_filter in ("all", "jobstreet"):
+            # A managed JobStreet session is opt-in for targeted searches.
+            # jobstreet_sources also permits the documented legacy B64
+            # fallback when no managed connection exists.
+            if connection_status(self.cfg, self.repo) == "READY" or not hasattr(self.repo, "sessions"):
+                jobstreet = jobstreet_sources(self.cfg, self.repo)
+            elif not has_managed_connection(self.repo):
+                jobstreet = jobstreet_sources(self.cfg, self.repo)
+        ats = ats + jobstreet
         progress.sources_total = len(ats) + (1 if self.cfg.brightdata_enabled and self.cfg.brightdata_api_token and source_filter in ("all", "linkedin", "brightdata_linkedin") else 0)
         progress.live_attempted = bool(progress.sources_total)
         await self._emit(progress_callback, progress)

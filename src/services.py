@@ -4,12 +4,12 @@ from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import httpx
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings
 from .jobs import NormalizedJob, evaluate, extract_skills, is_ph_location, freshness, is_active_listing
-from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, ResumeProfile, JobEvent
+from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, AppSetting, ResumeProfile, JobEvent
 from .security import ActionTokens
 log=logging.getLogger(__name__)
 DISCORD_ALERT_ROLE_ALLOWLIST={'1346328166100107366'}
@@ -26,6 +26,108 @@ class Repository:
         connect_args={'check_same_thread':False} if url.startswith('sqlite') else {}
         self.engine=create_engine(url,connect_args=connect_args); self.sessions=sessionmaker(self.engine,expire_on_commit=False)
     def create_schema(self): Base.metadata.create_all(self.engine)
+    def initialize_runtime_config(self, cfg: Settings) -> dict[str, str]:
+        """Create/load safe runtime settings and hydrate the process config.
+
+        Non-secret values live in app_settings. Browserless's bearer token is
+        migrated to Supabase Vault when that extension is available and is
+        never copied into a normal application table.
+        """
+        self.create_schema()
+        defaults = {
+            'browserless_endpoint': 'https://production-sfo.browserless.io',
+            'jobstreet_enabled': 'true',
+            'jobstreet_base_url': 'https://ph.jobstreet.com',
+            'jobstreet_login_url': '',
+            'jobstreet_location': 'Philippines',
+            'jobstreet_search_terms_json': '["DevOps", "Cloud", "IT Support"]',
+            'jobstreet_max_results': '50',
+            'jobstreet_auth_timeout_seconds': '600',
+            'jobstreet_scan_timeout_seconds': '60',
+            'jobstreet_last_verified': '',
+            'jobstreet_status': 'AUTH REQUIRED',
+        }
+        with self.sessions.begin() as session:
+            for key, value in defaults.items():
+                if session.get(AppSetting, key) is None:
+                    session.add(AppSetting(key=key, value=value))
+        with self.sessions() as session:
+            values = {
+                row.key: row.value
+                for row in session.scalars(select(AppSetting)).all()
+            }
+        endpoint = str(values.get('browserless_endpoint') or '').strip()
+        if endpoint:
+            cfg.browserless_endpoint = endpoint
+        enabled = str(values.get('jobstreet_enabled', 'true')).strip().lower()
+        cfg.jobstreet_enabled = enabled not in {'0', 'false', 'no', 'off'}
+        for key in (
+            'jobstreet_base_url',
+            'jobstreet_login_url',
+            'jobstreet_location',
+            'jobstreet_search_terms_json',
+        ):
+            value = str(values.get(key) or '')
+            if value:
+                setattr(cfg, key, value)
+        for key in (
+            'jobstreet_max_results',
+            'jobstreet_auth_timeout_seconds',
+            'jobstreet_scan_timeout_seconds',
+        ):
+            try:
+                setattr(cfg, key, int(values[key]))
+            except (KeyError, TypeError, ValueError):
+                pass
+        vault_token = self._vault_secret('browserless_api_token')
+        if vault_token:
+            cfg.browserless_api_token = vault_token
+        elif cfg.browserless_api_token:
+            # The env secret remains a bootstrap input only. On Supabase it is
+            # copied into Vault once; the next restart reads Vault instead.
+            self._vault_store_secret('browserless_api_token', cfg.browserless_api_token)
+        return values
+
+    def set_setting(self, key: str, value: str) -> None:
+        with self.sessions.begin() as session:
+            setting = session.get(AppSetting, key)
+            if setting is None:
+                session.add(AppSetting(key=key, value=str(value)))
+            else:
+                setting.value = str(value)
+
+    def _vault_secret(self, name: str) -> str | None:
+        if self.engine.dialect.name != 'postgresql':
+            return None
+        try:
+            with self.sessions() as session:
+                value = session.execute(
+                    text('SELECT secret FROM vault.decrypted_secrets WHERE name = :name LIMIT 1'),
+                    {'name': name},
+                ).scalar()
+            return str(value) if value else None
+        except Exception as exc:
+            log.info('vault_unavailable', extra={'error_type': type(exc).__name__})
+            return None
+
+    def _vault_store_secret(self, name: str, value: str) -> bool:
+        if self.engine.dialect.name != 'postgresql':
+            return False
+        try:
+            with self.sessions.begin() as session:
+                session.execute(
+                    text('SELECT vault.create_secret(:secret, :name, :description)'),
+                    {
+                        'secret': value,
+                        'name': name,
+                        'description': 'After Hours Job Hunter runtime secret',
+                    },
+                )
+            return True
+        except Exception as exc:
+            # Do not include the secret or provider response in logs.
+            log.info('vault_secret_migration_unavailable', extra={'secret_name': name, 'error_type': type(exc).__name__})
+            return False
     def save(self, item: NormalizedJob, score:int, reasons:list[str], warnings:list[str]) -> Job | None:
         with self.sessions() as s:
             existing=s.scalar(select(Job).where(Job.fingerprint==item.fingerprint))

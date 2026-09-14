@@ -42,7 +42,24 @@ Startup performs one controlled scan. Automatic scans then run every 900 seconds
 
 LinkedIn is optional and is used only when Bright Data is enabled, authenticated, has the correct LinkedIn Jobs dataset/input configuration, and stays within the configured free-tier request limit. It is never required for ATS scanning or Discord search.
 
-JobStreet is optional. Run `python -m src.jobstreet_auth` locally, complete Continue-with-Google, 2FA, consent, or CAPTCHA manually, and keep the resulting `data/private/jobstreet_session.json` private. For Render, place only a base64-encoded storage state in secret `JOBSTREET_SESSION_STATE_B64`; runtime materializes it privately. No password, cookies, session JSON, or token belongs in Git. Status is reported as `READY`, `AUTH REQUIRED`, or a source error based on available authenticated state and results.
+JobStreet is optional and is linked from Discord with `v!jobstreet`. The
+`CONNECT JOBSTREET` action creates a signed, short-lived, one-time private URL.
+The setup page opens a Browserless interactive browser; the user completes
+Google/JobStreet sign-in, 2FA, consent, or CAPTCHA manually. The verified
+Playwright state is encrypted before it is stored in `source_connections`.
+`CHECK CONNECTION`, `REAUTHENTICATE`, and `DISCONNECT` are available from the
+same control panel. Automatic scans and `v!search` include JobStreet only while
+the stored connection is `READY`; public ATS sources continue if it fails.
+
+Non-secret Browserless and JobStreet runtime settings are initialized
+idempotently in `app_settings`, including the safe Browserless endpoint,
+enabled flag, search terms, and timeouts. `BROWSERLESS_API_TOKEN` is a
+bootstrap secret and is stored/read through Supabase Vault when available; it
+is never printed or stored in `app_settings`. JobStreet session encryption is
+deterministically derived with domain separation from `APP_SECRET_KEY`, which
+must remain a deployment secret. There is no separate encryption-key
+environment variable and no random key on restart. `JOBSTREET_SESSION_STATE_B64`
+and `python -m src.jobstreet_auth` remain legacy fallbacks only.
 
 ## Freshness, relevance, and alerts
 
@@ -60,7 +77,14 @@ Review actions include cover-letter preview/download, regenerate, use-template, 
 
 ## Important configuration
 
-Copy `.env.example`; never commit values. Important names include `DATABASE_URL`, `DISCORD_BOT_TOKEN`, `DISCORD_CONTROL_CHANNEL_ID`, `DISCORD_WEBHOOK_URL`, `DISCORD_ALERT_ROLE_ID`, `POLLING_ENABLED`, `POLL_INTERVAL_SECONDS`, `SOURCE_TARGETS_JSON`, `SOURCE_CONFIG_PATH`, `APP_SECRET_KEY`, `APPLICATION_DRY_RUN`, Gemini variables, Bright Data variables, `JOBSTREET_SESSION_PATH`, and `JOBSTREET_SESSION_STATE_B64`.
+Copy `.env.example`; never commit values. Important bootstrap names include
+`DATABASE_URL`, `DISCORD_BOT_TOKEN`, `DISCORD_CONTROL_CHANNEL_ID`,
+`DISCORD_WEBHOOK_URL`, `DISCORD_ALERT_ROLE_ID`, `POLLING_ENABLED`,
+`POLL_INTERVAL_SECONDS`, `SOURCE_TARGETS_JSON`, `SOURCE_CONFIG_PATH`,
+`APP_SECRET_KEY`, `PUBLIC_BASE_URL`, `BROWSERLESS_API_TOKEN`,
+`APPLICATION_DRY_RUN`, Gemini variables, Bright Data variables, and the
+legacy `JOBSTREET_SESSION_PATH` / `JOBSTREET_SESSION_STATE_B64` fallback.
+Managed Browserless and JobStreet settings live in `app_settings`.
 
 ## Verification and deployment
 
@@ -86,6 +110,8 @@ Render needs an external PostgreSQL/Supabase `DATABASE_URL`, bot token, control 
 
 ## Latest verified state
 
-- Tests: 69 passed (one third-party Python 3.12 `audioop` deprecation warning)
+- Tests: 74 passed (one third-party Python 3.12 `audioop` deprecation warning)
 - Final release commit: current `main` HEAD (see `git log -1 --oneline`)
-- Included finalization: Discord-first controls, JobStreet Render-session handling, visual gallery, date-sorted job table/export/timeline, role-alert safeguards, and targeted-search regression tests.
+- Included finalization: Discord-first controls, database/Vault-backed
+  JobStreet linking, visual gallery, date-sorted job table/export/timeline,
+  role-alert safeguards, and targeted-search regression tests.

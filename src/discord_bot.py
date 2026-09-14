@@ -389,8 +389,78 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         finally:
             active_searches.discard(user_id)
     async def help_response(interaction):
-        embed=styled_embed('𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄','`v!search <role>` — search for recent roles\n`v!latest` — view the newest saved matches\n`v!viewall` — browse all stored matches\n`v!status` — check monitor health\n`v!scan` — run one protected scan\n`v!help` — show this guide')
+        embed=styled_embed('𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄','`v!search <role>` — search for recent roles\n`v!latest` — view the newest saved matches\n`v!viewall` — browse all stored matches\n`v!status` — check monitor health\n`v!scan` — run one protected scan\n`v!jobstreet` — connect or manage JobStreet\n`v!help` — show this guide')
         await interaction.response.send_message(embed=embed,ephemeral=True)
+
+    def jobstreet_status_embed(user_id):
+        from .jobstreet_link import connection_status
+        status=connection_status(cfg,repo,user_id)
+        with repo.sessions() as session:
+            from .models import SourceConnection
+            from sqlalchemy import select
+            record=session.scalar(select(SourceConnection).where(
+                SourceConnection.source=='jobstreet',
+                SourceConnection.discord_user_id==str(user_id),
+            ))
+        embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓',f'Authenticated source status: **{status}**')
+        if record and record.last_verified_at:
+            verified=record.last_verified_at.strftime('%Y-%m-%d %H:%M UTC')
+            embed.add_field(name='𝐋𝐀𝐒𝐓 𝐕𝐄𝐑𝐈𝐅𝐈𝐄𝐃',value=verified,inline=False)
+        if record and record.last_error:
+            embed.add_field(name='𝐍𝐎𝐓𝐄',value=record.last_error,inline=False)
+        embed.add_field(
+            name='𝐒𝐀𝐅𝐄𝐓𝐘',
+            value='Google sign-in, 2FA, security prompts, consent, and CAPTCHA stay manual. '
+                  'Only the encrypted browser session is retained.',
+            inline=False,
+        )
+        return embed
+
+    async def send_jobstreet_link(interaction, user_id):
+        from .jobstreet_link import browserless_ready, create_request
+        if not cfg.public_base_url:
+            await interaction.response.send_message(
+                embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄',
+                                   'Set PUBLIC_BASE_URL before creating a private setup link.'),
+                ephemeral=True,
+            )
+            return
+        if not browserless_ready(cfg):
+            await interaction.response.send_message(
+                embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄',
+                                   'The private Browserless connection service is not configured yet.'),
+                ephemeral=True,
+            )
+            return
+        token=await asyncio.to_thread(create_request,repo,user_id)
+        url=f'{cfg.public_base_url.rstrip("/")}/connect/jobstreet/{token}'
+        embed=styled_embed(
+            '𝐏𝐑𝐈𝐕𝐀𝐓𝐄 𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐒𝐄𝐓𝐔𝐏',
+            'Open the private setup link, then complete Google sign-in and any security challenges yourself.',
+        )
+        embed.add_field(name='𝐒𝐄𝐓𝐔𝐏 𝐋𝐈𝐍𝐊',value=f'[OPEN PRIVATE SETUP]({url})',inline=False)
+        embed.add_field(name='𝐄𝐗𝐏𝐈𝐑𝐘',value='This one-time link expires in 10 minutes.',inline=False)
+        await interaction.response.send_message(embed=embed,ephemeral=True)
+
+    class JobStreetView(discord.ui.View):
+        def __init__(self):
+            super().__init__(timeout=None)
+        @discord.ui.button(label='CONNECT JOBSTREET',style=discord.ButtonStyle.primary,custom_id='jobhunter:jobstreet-connect')
+        async def connect(self,interaction,button):
+            await send_jobstreet_link(interaction,interaction.user.id)
+        @discord.ui.button(label='CHECK CONNECTION',style=discord.ButtonStyle.secondary,custom_id='jobhunter:jobstreet-check')
+        async def check(self,interaction,button):
+            await interaction.response.send_message(embed=jobstreet_status_embed(interaction.user.id),view=JobStreetView(),ephemeral=True)
+        @discord.ui.button(label='REAUTHENTICATE',style=discord.ButtonStyle.secondary,custom_id='jobhunter:jobstreet-reauth')
+        async def reauthenticate(self,interaction,button):
+            await send_jobstreet_link(interaction,interaction.user.id)
+        @discord.ui.button(label='DISCONNECT',style=discord.ButtonStyle.danger,custom_id='jobhunter:jobstreet-disconnect')
+        async def disconnect_source(self,interaction,button):
+            from .jobstreet_link import cancel_interactive_sessions, disconnect
+            removed=await asyncio.to_thread(disconnect,repo,interaction.user.id)
+            cancel_interactive_sessions(interaction.user.id)
+            message='The encrypted JobStreet session was removed.' if removed else 'No saved JobStreet session was found.'
+            await interaction.response.send_message(embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐃𝐈𝐒𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐄𝐃',message),ephemeral=True)
     class SearchModal(discord.ui.Modal,title='Find recent jobs'):
         role=discord.ui.TextInput(label='Job role / keyword',placeholder='Junior DevOps',max_length=100)
         location=discord.ui.TextInput(label='Location',default='Philippines',required=False,max_length=100)
@@ -420,6 +490,13 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         async def status(self,interaction,button):
             await interaction.response.defer(ephemeral=True,thinking=True)
             await interaction.followup.send(embed=await panel_embed(),ephemeral=True)
+        @discord.ui.button(label='JOBSTREET',style=discord.ButtonStyle.secondary,custom_id='jobhunter:jobstreet')
+        async def jobstreet(self,interaction,button):
+            await interaction.response.send_message(
+                embed=jobstreet_status_embed(interaction.user.id),
+                view=JobStreetView(),
+                ephemeral=True,
+            )
         @discord.ui.button(label='VIEW LATEST JOBS',style=discord.ButtonStyle.secondary,custom_id='jobhunter:latest')
         async def latest(self,interaction,button):
             from sqlalchemy import select
@@ -542,7 +619,13 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         if command=='view' and argument.lower()=='all':
             command='viewall'; argument=''
         if command=='help':
-            embed=styled_embed('𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄','`v!search <role>`\n`v!latest`\n`v!viewall`\n`v!status`\n`v!scan`\n`v!help`'); await message.channel.send(embed=embed); return
+            embed=styled_embed('𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄','`v!search <role>`\n`v!latest`\n`v!viewall`\n`v!status`\n`v!scan`\n`v!jobstreet`\n`v!help`'); await message.channel.send(embed=embed); return
+        if command=='jobstreet':
+            await message.channel.send(
+                embed=jobstreet_status_embed(message.author.id),
+                view=JobStreetView(),
+            )
+            return
         if command=='resume':
             token=ActionTokens(cfg).issue_control('resume')
             if not token or not cfg.public_base_url:
