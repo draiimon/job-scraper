@@ -1,4 +1,4 @@
-modules = ["python-3.12"]
+modules = ["python-3.12", "postgresql-16"]
 
 [nix]
 channel = "stable-25_05"
@@ -34,3 +34,9 @@ outputType = "webview"
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+BRIGHTDATA_ENABLED = "true"
+BRIGHTDATA_LINKEDIN_JOBS_INPUTS_JSON = "[{\"location\":\"Philippines\",\"keyword\":\"DevOps\",\"country\":\"PH\",\"time_range\":\"Past 24 hours\",\"job_type\":\"\",\"experience_level\":\"Entry level\",\"remote\":\"\",\"company\":\"\",\"selective_search\":false,\"jobs_to_not_include\":[],\"location_radius\":\"\"},{\"location\":\"Philippines\",\"keyword\":\"Cloud\",\"country\":\"PH\",\"time_range\":\"Past 24 hours\",\"job_type\":\"\",\"experience_level\":\"Entry level\",\"remote\":\"\",\"company\":\"\",\"selective_search\":false,\"jobs_to_not_include\":[],\"location_radius\":\"\"},{\"location\":\"Philippines\",\"keyword\":\"IT Support\",\"country\":\"PH\",\"time_range\":\"Past 24 hours\",\"job_type\":\"\",\"experience_level\":\"Entry level\",\"remote\":\"\",\"company\":\"\",\"selective_search\":false,\"jobs_to_not_include\":[],\"location_radius\":\"\"}]"
