@@ -1,11 +1,18 @@
 from __future__ import annotations
-import asyncio, io, logging, time
+import asyncio, io, logging, random, time
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 from .security import ActionTokens
 
 log=logging.getLogger(__name__)
+
+def discord_timestamp(value):
+    if not value: return '—'
+    try:
+        unix=int(datetime.fromisoformat(value).timestamp())
+        return f'<t:{unix}:t> • <t:{unix}:R>'
+    except (TypeError, ValueError):
+        return '—'
 
 async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_scan):
     if not cfg.discord_bot_token:
@@ -27,10 +34,6 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             stored=s.get(Job,job_id); stored.raw_metadata={**(stored.raw_metadata or {}),'cover_letter':letter,'cover_letter_mode':mode}; s.commit(); job=stored
         return job,letter,mode
 
-    def stamp(value):
-        if not value: return '—'
-        try: return datetime.fromisoformat(value).astimezone(ZoneInfo('Asia/Manila')).strftime('%I:%M %p')
-        except ValueError: return '—'
     def set_bot_footer(embed):
         footer={'text':'After Hours Job Hunter • Made by masoncalix'}
         avatar=getattr(getattr(bot,'user',None),'display_avatar',None)
@@ -40,7 +43,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
     def panel_embed():
         state=scheduler_snapshot(); scanning=state.get('phase')=='scanning'
         embed=discord.Embed(title='𝐀𝐅𝐓𝐄𝐑 𝐇𝐎𝐔𝐑𝐒 𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑',description='Your automated Philippine tech-job monitor is online.',colour=0xF59E0B)
-        embed.add_field(name='𝐒𝐘𝐒𝐓𝐄𝐌 𝐒𝐓𝐀𝐓𝐔𝐒',value=f"Service\nONLINE\n\nScheduler\n{state.get('status','starting').upper()}\n\nLast scan\n{stamp(state.get('last_poll_at'))}\n\nNext scan\n{stamp(state.get('next_poll_at'))}",inline=True)
+        embed.add_field(name='𝐒𝐘𝐒𝐓𝐄𝐌 𝐒𝐓𝐀𝐓𝐔𝐒',value=f"Service\nONLINE\n\nScheduler\n{state.get('status','starting').upper()}\n\nLast scan\n{discord_timestamp(state.get('last_poll_at'))}\n\nNext scan\n{discord_timestamp(state.get('next_poll_at'))}",inline=True)
         embed.add_field(name='𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐈𝐎𝐍𝐒',value=f"Sources\n{state.get('sources_working',0)} active\n\nLinkedIn\n{state.get('linkedin_status')}\n\nJobStreet\n{state.get('jobstreet_status')}\n\nDatabase\nCONNECTED\n\nDiscord\nCONNECTED",inline=True)
         embed.add_field(name='𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆 𝐍𝐎𝐖' if scanning else '𝐒𝐂𝐀𝐍 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄',value='Checking recent active jobs…' if scanning else f"Jobs checked: {state.get('jobs_checked',0)}\nNew qualifying jobs: {state.get('new_recent_jobs',0)}\nAlerts sent: {state.get('alerts_sent',0)}",inline=False)
         embed.add_field(name='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',value='Use **SEARCH JOBS**, type `v!search Junior DevOps`, or type `v!resume` to replace the saved resume.',inline=False)
@@ -228,7 +231,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             with repo.sessions() as s: job=s.get(Job,job_id)
             if not job: continue
             try:
-                embed,view=card(job); await channel.send(embed=embed,view=view)
+                embed,view=card(job); await channel.send(content=random.choice(cfg.discord_motivations),embed=embed,view=view)
                 with repo.sessions() as s:
                     stored=s.get(Job,job_id); stored.notification_state='SENT'; stored.status=JobStatus.NOTIFIED.value; s.commit()
             except Exception as exc: log.warning('discord_bot_alert_failed',extra={'job_id':job_id,'error':str(exc)})

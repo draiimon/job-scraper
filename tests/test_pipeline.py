@@ -19,6 +19,7 @@ import src.main as main_module
 from fastapi import HTTPException
 from src.sources import configured_sources
 from src.resumes import extract_resume_text
+from src.discord_bot import discord_timestamp
 
 def job(**overrides):
     values=dict(source='test',source_job_id='one',title='Junior DevOps Engineer',company='Cloud PH',location='Taguig, Philippines — Hybrid',description='Fresh graduate AWS Docker Terraform Linux CI/CD Kubernetes.',url='https://example.com/one',date_posted=datetime.now(timezone.utc)-timedelta(hours=2))
@@ -205,6 +206,11 @@ def test_empty_environment_values_keep_scheduler_defaults(monkeypatch):
     monkeypatch.setenv('MIN_NOTIFY_SCORE','')
     cfg=Settings()
     assert cfg.polling_enabled is True and cfg.poll_interval_seconds == 900 and cfg.min_notify_score == 70
+
+def test_discord_scan_times_use_native_dynamic_timestamps():
+    value='2026-09-14T11:24:40+00:00'
+    assert discord_timestamp(value)=='<t:1789385080:t> • <t:1789385080:R>'
+    assert discord_timestamp(None)=='—'
 
 @pytest.mark.asyncio
 async def test_manual_scan_preserves_automatic_next_poll(tmp_path,monkeypatch):
