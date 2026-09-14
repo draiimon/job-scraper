@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     discord_motivations_json: str = ""
     min_notify_score: int = 70
     min_auto_application_score: int = 85
-    max_notifications_per_cycle: int = 3
+    max_notifications_per_cycle: int = 10
     manual_scan_cooldown_seconds: int = 300
     scan_source_concurrency: int = 6
     scan_source_timeout_seconds: int = 15

@@ -390,7 +390,13 @@ async def send_search_results(request: DiscordSearchResults):
 @app.get('/latest')
 def latest_jobs(limit:int=10):
     with repo.sessions() as s:
-        return s.scalars(select(Job).where(Job.status!=JobStatus.EXPIRED.value,Job.score>=cfg.min_notify_score,Job.date_posted.is_not(None)).order_by(Job.date_posted.desc()).limit(max(1,min(limit,25)))).all()
+        cutoff=datetime.now(timezone.utc)-timedelta(days=90)
+        return s.scalars(select(Job).where(
+            Job.status!=JobStatus.EXPIRED.value,
+            Job.score>=cfg.min_notify_score,
+            Job.date_posted.is_not(None),
+            Job.date_posted>=cutoff,
+        ).order_by(Job.date_posted.desc(),Job.score.desc()).limit(max(1,min(limit,25)))).all()
 @app.patch('/jobs/{job_id}/status')
 def update_status(job_id:int, update:StatusUpdate):
     with repo.sessions() as s:

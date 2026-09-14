@@ -102,11 +102,12 @@ class Repository:
             except (KeyError, TypeError, ValueError):
                 pass
         vault_token = self._vault_secret('browserless_api_token')
-        if vault_token:
+        # A deployment secret is the operator's current source of truth. A
+        # stale Vault value must not override a rotated/reconnected secret and
+        # cause Browserless to fail with an opaque 401.
+        if not cfg.browserless_api_token and vault_token:
             cfg.browserless_api_token = vault_token
-        elif cfg.browserless_api_token:
-            # The env secret remains a bootstrap input only. On Supabase it is
-            # copied into Vault once; the next restart reads Vault instead.
+        elif cfg.browserless_api_token and not vault_token:
             self._vault_store_secret('browserless_api_token', cfg.browserless_api_token)
         return values
 

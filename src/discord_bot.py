@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio, io, logging, os, random, socket, time, uuid
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from .security import ActionTokens
 
@@ -65,7 +65,15 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             yield
 
     def search_embed(role, progress, title='𝐒𝐄𝐀𝐑𝐂𝐇𝐈𝐍𝐆', detail=''):
-        text=f"**{role.title()}**\nPhilippines · Recent jobs\n\nSources checked: {progress.sources_checked} / {progress.sources_total}\nJobs reviewed: {progress.jobs_reviewed}\nRecent PH tech jobs: {progress.recent_ph_jobs}\nPotential matches: {progress.potential_matches}"
+        text=(
+            f"**{role.title()}**\nPhilippines · Recent jobs\n\n"
+            f"Sources checked: {progress.sources_checked} / {progress.sources_total}\n"
+            f"Jobs reviewed: {progress.jobs_reviewed}\n"
+            f"Recent 0–90 day jobs: {progress.recent_ph_jobs}\n"
+            f"Query-relevant jobs: {progress.query_relevant_jobs}\n"
+            f"Entry-level compatible: {progress.entry_level_compatible}\n"
+            f"Qualifying matches: {progress.potential_matches}"
+        )
         if detail: text += f"\n\n{detail}"
         return styled_embed(title,text)
 
@@ -304,9 +312,19 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         pages=max(1,(total+4)//5)
         lines=[]
         for number,job in enumerate(jobs,start=page*5+1):
-            posted=job.date_posted.strftime('%b %d') if job.date_posted else 'Unknown date'
+            posted=job.date_posted.strftime('%Y-%m-%d') if job.date_posted else 'Unknown date'
+            age='unknown age'
+            if job.date_posted:
+                posted_at=job.date_posted
+                if posted_at.tzinfo is None:
+                    posted_at=posted_at.replace(tzinfo=timezone.utc)
+                age=f'{max(0,(datetime.now(timezone.utc)-posted_at).days)}d old'
             location=(job.location or 'Location not stated').replace(', Philippines','').strip()
-            lines.append(f'`{number:02}  {posted}  ·  {job.score}% MATCH`\n**{job.title}**\n{job.company} · {location}')
+            source=job.source.replace(':',' / ')
+            lines.append(
+                f'`{number:02}  {posted}  ·  {age}  ·  {job.score}% MATCH`\n'
+                f'**{job.title}**\n{job.company} · {location}\nSource: {source}'
+            )
         body='\n\n'.join(lines) if lines else 'No recent qualifying jobs are stored yet.'
         embed=styled_embed('𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃',f'Active stored computer jobs from the last 90 days · newest/reposted first\n\n{body}')
         embed.add_field(

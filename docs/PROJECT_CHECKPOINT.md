@@ -65,9 +65,9 @@ and `python -m src.jobstreet_auth` remain legacy fallbacks only.
 
 The pipeline prioritizes DevOps, cloud, infrastructure, systems, Linux, SRE, support, networking, software, QA, operations, analyst, cybersecurity, and other credible junior technology roles. It rejects unrelated accounting, HR, sales, marketing, generic VA, admin, and nontechnical customer-service work.
 
-Freshness uses the actual source post date, not discovery time. Jobs from 0–3 days receive highest priority; 4–7 days normal priority; 8–14 days reduced priority; 15–30 days require a strong match; jobs older than 30 days are normally skipped. A stored job can alert again only with source evidence of a genuine repost/reactivation, such as a new posting timestamp or ID. Cross-source deduplication remains active.
+Freshness uses the actual source post date, not discovery time. Jobs from 0–1, 2–7, 8–14, 15–30, 31–60, and 61–90 days receive progressively lower priority; relevant active jobs remain eligible through day 90. Jobs older than 90 days are normally skipped. A stored job can alert again only with source evidence of a genuine repost/reactivation, such as a new posting timestamp or ID. Cross-source deduplication remains active.
 
-Only a real new qualifying automatic alert can mention role `<@&1346328166100107366>`. The allowlist permits that role only. Search, status, help, previews, errors, scan updates, saves, and duplicate deliveries never ping a role, `@everyone`, or `@here`.
+Only a real new qualifying automatic alert can mention role `<@&1346328166100107366>`. The allowlist permits that role only. Search, status, help, previews, errors, scan updates, saves, and duplicate deliveries never ping a role, `@everyone`, or `@here`. The default automatic anti-spam limit is 10 alerts per cycle; valid overflow stays persisted instead of being discarded.
 
 ## Cover-letter and application flow
 
@@ -110,7 +110,10 @@ Render needs an external PostgreSQL/Supabase `DATABASE_URL`, bot token, control 
 
 ## Latest verified state
 
-- Tests: 74 passed (one third-party Python 3.12 `audioop` deprecation warning)
+- Tests: 75 passed (one third-party Python 3.12 `audioop` deprecation warning)
+- Live startup scan: 27 sources loaded, 27 attempted, 26 successful, 5,089 raw/normalized jobs, 4,306 within 0–90 days, 240 computer-related, 164 entry-compatible, and 865 duplicates removed.
+- Live signed JobStreet handoff: Browserless CDP connected, JobStreet OAuth login navigation was started, the response contained the live-browser redirect, and the session stopped at `WAITING_FOR_USER` pending manual Google/2FA/CAPTCHA completion.
+- Live targeted searches: software engineer returned 2 qualifying stored/live results; developer returned 3. Both reported real source, review, freshness, relevance, entry-level, and qualifying counters with no Bright Data errors.
 - Final release commit: current `main` HEAD (see `git log -1 --oneline`)
 - Included finalization: Discord-first controls, database/Vault-backed
   JobStreet linking, visual gallery, date-sorted job table/export/timeline,

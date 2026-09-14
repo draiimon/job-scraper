@@ -25,6 +25,8 @@ class SearchProgress:
     sources_checked: int = 0
     jobs_reviewed: int = 0
     recent_ph_jobs: int = 0
+    query_relevant_jobs: int = 0
+    entry_level_compatible: int = 0
     potential_matches: int = 0
     live_attempted: bool = False
     live_available: bool = False
@@ -203,6 +205,14 @@ class ManualJobSearch:
                 progress.jobs_reviewed += 1
                 if is_ph_location(item) and item.date_posted and item.date_posted >= cutoff:
                     progress.recent_ph_jobs += 1
+                score, _reasons, warnings, relevant = evaluate(item)
+                if relevant and self._matches_query(item, role):
+                    progress.query_relevant_jobs += 1
+                if relevant and not any(
+                    warning.startswith("Senior-level") or warning.startswith("Requires")
+                    for warning in warnings
+                ):
+                    progress.entry_level_compatible += 1
                 result = self._accept(item, role, cutoff, min_score, entry_level_only, work_setup)
                 if not result:
                     continue
@@ -282,7 +292,11 @@ class ManualJobSearch:
             try:
                 if not await asyncio.to_thread(self.repo.reserve_brightdata_page_loads, "linkedin_jobs", 1, self.cfg.brightdata_linkedin_monthly_request_limit):
                     raise SourceError("Bright Data LinkedIn monthly safety limit reached")
-                payload = {"location": location, "keyword": role, "country": "PH" if "philipp" in location.lower() else "", "time_range": freshness_text or "Past 24 hours", "job_type": "", "experience_level": "Entry level" if entry_level_only else "", "remote": remote or work_setup, "company": "", "selective_search": False, "jobs_to_not_include": [], "location_radius": ""}
+                # The Discover API applies its own recent-results default;
+                # its schema rejects the UI labels ("Past 90 days", etc.).
+                # The stored ATS pool remains the authoritative 90-day
+                # search source, while this call adds targeted live results.
+                payload = {"location": location, "keyword": role, "country": "PH" if "philipp" in location.lower() else "", "job_type": "", "experience_level": "Entry level" if entry_level_only else "", "remote": remote or work_setup, "company": "", "selective_search": False, "jobs_to_not_include": [], "location_radius": ""}
                 rows = await self.client.linkedin_discovery([payload], limit)
                 source = BrightDataJobs("linkedin_jobs", self.cfg.brightdata_linkedin_jobs_dataset_id or "gd_lpfll7v5hcqtkxl6l", [payload], self.client)
                 items = [source._normalize(row) for row in rows if isinstance(row, dict) and source._usable(row)]
