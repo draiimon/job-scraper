@@ -1,0 +1,8 @@
+[
+  {"kind": "greenhouse", "name": "GitLab", "token": "gitlab"},
+  {"kind": "greenhouse", "name": "Cloudflare", "token": "cloudflare"},
+  {"kind": "greenhouse", "name": "Wise", "token": "wise"},
+  {"kind": "ashby", "name": "Notion", "token": "notion"},
+  {"kind": "ashby", "name": "PostHog", "token": "posthog"},
+  {"kind": "ashby", "name": "Linear", "token": "linear"}
+]

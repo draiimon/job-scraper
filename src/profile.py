@@ -1,0 +1,15 @@
+from __future__ import annotations
+import json
+from pathlib import Path
+from .config import settings
+
+def profile() -> dict:
+    path=Path(settings().profile_path)
+    if path.exists(): return json.loads(path.read_text(encoding='utf-8'))
+    return {'skills':[], 'projects':[], 'summary':''}
+
+def relevant_facts(description: str) -> tuple[list[str], list[dict]]:
+    data=profile(); text=description.lower()
+    skills=[x for x in data.get('skills',[]) if x.lower() in text]
+    projects=[x for x in data.get('projects',[]) if any(k.lower() in text for k in x.get('skills',[]))]
+    return skills[:8], projects[:3]

@@ -1,0 +1,47 @@
+# Secrets and private personal material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*token*.json
+*credentials*.json
+data/private/
+data/applications/
+data/master-profile.json
+*.pdf
+
+# Local databases, logs, caches, and temporary files
+*.sqlite3
+*.db
+*.sqlite
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local tools and editors
+.venv/
+venv/
+env/
+.cursor/
+.vscode/
+.codex/
+.agents/
+.claude/
+
+# Operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
