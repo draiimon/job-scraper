@@ -75,7 +75,11 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.response.defer(ephemeral=True,thinking=True)
             job,letter=await self.letter()
             if not letter: await interaction.followup.send('No cover letter is available.',ephemeral=True); return
-            chunks=[letter[i:i+3900] for i in range(0,len(letter),3900)]
+            from .applications import discord_cover_letter_chunks
+            chunks=discord_cover_letter_chunks(letter)
+            if not chunks:
+                await interaction.followup.send('The saved cover letter contains no readable text.',ephemeral=True)
+                return
             await interaction.followup.send(embed=styled_embed('𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑',chunks[0]),ephemeral=True)
             for chunk in chunks[1:]: await interaction.followup.send(embed=styled_embed('𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑',chunk),ephemeral=True)
         @discord.ui.button(label='REGENERATE',style=discord.ButtonStyle.secondary)
