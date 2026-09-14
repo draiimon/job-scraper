@@ -196,7 +196,7 @@ class Discord:
                 if response.status_code not in (204,404): response.raise_for_status()
         repo.set_state('discord_control_panel_message_id',None); repo.set_state('discord_status_message_id',None); repo.set_state('discord_welcome_message_id',None)
 class Pipeline:
-    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(None if config.discord_bot_token else config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0
+    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0
     def begin_cycle(self): self._cycle_notifications=0
     async def process(self, item:NormalizedJob, notify=True) -> tuple[Job|None,bool]:
         if not is_ph_location(item) or not is_active_listing(item): return None, False
@@ -211,7 +211,8 @@ class Pipeline:
         async with self._cycle_lock:
             if self._cycle_notifications>=self.config.max_notifications_per_cycle: return
             self._cycle_notifications+=1
-        if self.config.discord_bot_token:
+        bot_healthy=bool((self.repo.state('discord_bot_health',{}) or {}).get('healthy'))
+        if self.config.discord_bot_token and bot_healthy:
             job.notification_state='BOT_PENDING'
             with self.repo.sessions() as s:
                 stored=s.get(Job,job.id); stored.notification_state='BOT_PENDING'; s.commit()

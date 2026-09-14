@@ -153,6 +153,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             panel_view=ControlView(); bot.add_view(panel_view); registered=True
         await refresh_panel()
         if not panel_task: panel_task=asyncio.create_task(panel_watcher())
+        repo.set_state('discord_bot_health',{'healthy':True})
         log.info('discord_bot_ready')
     @bot.event
     async def on_message(message):
@@ -184,5 +185,6 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         else: await message.channel.send('Use `v!help`.')
     try: await bot.start(cfg.discord_bot_token)
     finally:
+        repo.set_state('discord_bot_health',{'healthy':False})
         if panel_task: panel_task.cancel()
         if not bot.is_closed(): await bot.close()
