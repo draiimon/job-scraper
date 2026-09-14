@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, logging
+import asyncio, logging, random
 from pathlib import Path
 from datetime import datetime, timezone
 import httpx
@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings
 from .jobs import NormalizedJob, evaluate, extract_skills, is_ph_location
-from .models import Base, Job, JobStatus, SourceRun, SourceHealth
+from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState
 from .security import ActionTokens
 log=logging.getLogger(__name__)
 class Repository:
@@ -51,8 +51,15 @@ class Repository:
         with self.sessions() as s:
             item=s.get(SourceHealth,source) or SourceHealth(source=source); s.add(item)
             item.last_checked_at=datetime.now(timezone.utc); item.consecutive_failures+=1; item.last_error=error; item.status='unhealthy'; s.commit()
+    def reserve_baseline_alert(self, limit=5):
+        with self.sessions() as s:
+            state=s.get(AppState,'baseline_alert_count')
+            if not state: state=AppState(key='baseline_alert_count',value='0'); s.add(state)
+            count=int(state.value)
+            if count>=limit: s.commit(); return False
+            state.value=str(count+1); s.commit(); return True
 class Discord:
-    def __init__(self,url:str|None, motivation:str='', cfg:Settings|None=None): self.url=url; self.motivation=motivation; self.cfg=cfg
+    def __init__(self,url:str|None, motivations:list[str]|str='', cfg:Settings|None=None): self.url=url; self.motivations=motivations if isinstance(motivations,list) else [motivations]; self.cfg=cfg
     def _link(self,job,action):
         if not self.cfg or not self.cfg.public_base_url: return None
         token=ActionTokens(self.cfg).issue(job.id,action)
@@ -76,17 +83,17 @@ class Discord:
         if row2: rows.append({'type':1,'components':row2})
         footer=f'{job.source} · Ready to apply'
         if test: footer='𝐓𝐄𝐒𝐓 𝐀𝐋𝐄𝐑𝐓 — No real application will be sent.'
-        return {'content':self.motivation,'embeds':[{'title':f'🔔 {label} · {job.score}%','description':f'**{job.title}**\n{job.company}\n\n'+' · '.join(details),'url':job.url,'fields':fields,'footer':{'text':footer}}],'components':[] if test else rows}
+        return {'content':random.choice(self.motivations),'embeds':[{'title':f'🔔 {label} · {job.score}%','description':f'**{job.title}**\n{job.company}\n\n'+' · '.join(details),'url':job.url,'fields':fields,'footer':{'text':footer}}],'components':[] if test else rows}
     async def send(self,job):
         if not self.url: return 'SKIPPED'
         return await self.send_payload(self.payload(job))
     async def send_payload(self,payload):
         if not self.url: return 'SKIPPED'
         async with httpx.AsyncClient(timeout=15) as c:
-            r=await c.post(self.url,json=payload); r.raise_for_status()
+            r=await c.post(self.url,params={'with_components':'true'},json=payload); r.raise_for_status()
         return 'SENT'
 class Pipeline:
-    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivation,config)
+    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock()
     async def process(self, item:NormalizedJob, notify=True) -> tuple[Job|None,bool]:
         if not is_ph_location(item): return None, False
         score,reasons,warnings,relevant=evaluate(item)
@@ -125,7 +132,11 @@ class Pipeline:
                 discovered+=1; job,accepted=await self.process(item,notify=not baseline); filtered+=not accepted; new+=job is not None
                 if baseline and job and job.score>=self.config.min_notify_score: baseline_candidates.append(job)
             if baseline:
-                for job in baseline_candidates[:5]: await self.notify(job)
+                for job in baseline_candidates:
+                    async with self._baseline_lock:
+                        allowed=self.repo.reserve_baseline_alert()
+                    if not allowed: break
+                    await self.notify(job)
             self.repo.run_finish(run,success=True,discovered=discovered,new_jobs=new,filtered=filtered)
             self.repo.health_success(source.name,discovered,baseline=True)
         except Exception as e:

@@ -33,8 +33,10 @@ def is_ph_location(job: NormalizedJob) -> bool:
     return any(x in place for x in PH_LOCATIONS) and not ("remote" in place and "philippines" not in place and "ph" not in place)
 def evaluate(job: NormalizedJob, now: datetime | None=None) -> tuple[int,list[str],list[str],bool]:
     text=clean(f"{job.title} {job.description}"); title=clean(job.title); score=0; reasons=[]; warnings=[]
-    primary=any(x in text for x in PRIMARY_ROLE_TERMS)
-    broad=any(x in text for x in BROAD_ROLE_TERMS)
+    primary_in_title=any(x in title for x in PRIMARY_ROLE_TERMS)
+    broad=any(x in title for x in BROAD_ROLE_TERMS)
+    technical_context=any(x in title for x in ('engineer','developer','support','analyst','administrator','technician','trainee','graduate'))
+    primary=primary_in_title or (technical_context and any(x in text for x in PRIMARY_ROLE_TERMS))
     relevant=primary or broad
     if primary:
         score+=35; reasons.append("Relevant cloud/DevOps/infrastructure role")
@@ -43,8 +45,8 @@ def evaluate(job: NormalizedJob, now: datetime | None=None) -> tuple[int,list[st
     for skill, points in SKILLS.items():
         if skill in text: score+=points; reasons.append(skill.upper() if skill != "ci/cd" else "CI/CD")
     if any(x in text for x in JUNIOR): score+=20; reasons.append("Entry-level indicator")
-    if any(x in title for x in NEGATIVE): score-=100; warnings.append("Senior leadership title")
-    elif any(x in text for x in NEGATIVE): score-=35; warnings.append("Senior-level language")
+    senior_role=any(x in title for x in NEGATIVE) or bool(re.search(r'\b(?:senior|sr\.?|lead|principal|staff)\s+(?:\w+\s+){0,2}(?:engineer|developer|administrator|analyst)\b',text))
+    if senior_role: score-=100; warnings.append("Senior-level role")
     if re.search(r"\b(?:5|6|7|8|9|10)\+?\s*years?", text): score-=70; warnings.append("Requires 5+ years")
     elif re.search(r"\b[34]\+?\s*years?", text): score-=40; warnings.append("Requires 3-4 years")
     if not relevant: score-=50; warnings.append("Role is outside technology disciplines")
@@ -53,7 +55,7 @@ def evaluate(job: NormalizedJob, now: datetime | None=None) -> tuple[int,list[st
         age=(current-job.date_posted).total_seconds()/86400
         if age<=1: score+=15; reasons.append("Posted within 24 hours")
         elif age<=3: score+=10; reasons.append("Posted within 3 days")
-    return max(0,min(100,score)), reasons, warnings, relevant and score >= 0
+    return max(0,min(100,score)), reasons, warnings, relevant and not senior_role and score >= 0
 
 def extract_skills(job: NormalizedJob) -> list[str]:
     text=clean(f"{job.title} {job.description}")

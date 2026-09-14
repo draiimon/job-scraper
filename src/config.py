@@ -10,7 +10,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     database_url: str = "sqlite:///./data/job_agent.sqlite3"
     discord_webhook_url: str | None = None
-    discord_motivation: str = "PU IS TANG IS NA IS MO! MAG APPLY KANA NG WORK KUNG AYAW MO MAGING UNEMPLOYED!"
+    discord_motivation: str = ""
+    discord_motivations_json: str = ""
     min_notify_score: int = 70
     min_auto_application_score: int = 85
     auto_send_email_applications: bool = False
@@ -60,6 +61,20 @@ class Settings(BaseSettings):
     def gemini_projects(self) -> dict[str,str]:
         try: return {str(k):str(v) for k,v in json.loads(self.gemini_key_projects_json).items()}
         except json.JSONDecodeError: return {}
+    @property
+    def discord_motivations(self) -> list[str]:
+        try:
+            configured=json.loads(self.discord_motivations_json)
+            if isinstance(configured,list) and all(isinstance(x,str) and x.strip() for x in configured): return configured
+        except json.JSONDecodeError: pass
+        if self.discord_motivation.strip(): return [self.discord_motivation]
+        return [
+            '𝐏𝐔𝐓𝐀𝐍𝐆 𝐈𝐍𝐀 𝐌𝐎! 𝐌𝐀𝐆-𝐀𝐏𝐏𝐋𝐘 𝐊𝐀 𝐍𝐀 𝐍𝐆 𝐖𝐎𝐑𝐊 𝐊𝐔𝐍𝐆 𝐀𝐘𝐀𝐖 𝐌𝐎 𝐌𝐀𝐆𝐈𝐍𝐆 𝐔𝐍𝐄𝐌𝐏𝐋𝐎𝐘𝐄𝐃.',
+            '𝐀𝐍𝐎 𝐏𝐀 𝐇𝐈𝐍𝐈𝐇𝐈𝐍𝐓𝐀𝐘 𝐌𝐎? 𝐌𝐀𝐆-𝐀𝐏𝐏𝐋𝐘 𝐊𝐀 𝐍𝐀.',
+            '𝐇𝐔𝐖𝐀𝐆 𝐌𝐎 𝐍𝐀 𝐏𝐀𝐋𝐀𝐆𝐏𝐀𝐒𝐈𝐍. 𝐀𝐏𝐏𝐋𝐘.',
+            '𝐏𝐀𝐒𝐀 𝐊𝐀 𝐍𝐀 𝐍𝐆 𝐑𝐄𝐒𝐔𝐌𝐄. 𝐇𝐈𝐍𝐃𝐈 𝐈𝐓𝐎 𝐌𝐀𝐆-𝐀𝐀𝐏𝐏𝐋𝐘 𝐏𝐀𝐑𝐀 𝐒𝐀𝐘𝐎.',
+            '𝐌𝐀𝐘 𝐁𝐀𝐆𝐎𝐍𝐆 𝐖𝐎𝐑𝐊. 𝐆𝐀𝐋𝐀𝐖-𝐆𝐀𝐋𝐀𝐖 𝐍𝐀.'
+        ]
 
 @lru_cache
 def settings() -> Settings: return Settings()

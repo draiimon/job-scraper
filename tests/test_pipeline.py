@@ -33,6 +33,8 @@ def test_broad_technology_role_is_eligible_but_senior_is_not():
     assert valid and score >= 60
     senior=evaluate(job(title='Senior Software Engineer',description='Python Docker requires 5+ years'))
     assert senior[0] == 0
+    unrelated=evaluate(job(title='Accounting Assistant',description='Maintain invoices and use AWS accounting software.'))
+    assert not unrelated[3]
 
 @pytest.mark.asyncio
 async def test_pipeline_deduplicates_and_persists(tmp_path):
@@ -80,6 +82,14 @@ def test_ai_revision_validator_rejects_fabricated_claims():
 def test_supabase_postgres_url_uses_installed_psycopg_driver():
     repo=Repository('postgresql://user:password@example.com:5432/database')
     assert repo.engine.url.drivername == 'postgresql+psycopg'
+
+def test_global_baseline_alert_limit(tmp_path):
+    repo=Repository(f'sqlite:///{tmp_path}/baseline.db'); repo.create_schema()
+    assert [repo.reserve_baseline_alert() for _ in range(6)] == [True,True,True,True,True,False]
+
+def test_default_motivation_pool_is_available():
+    cfg=Settings(discord_motivation='',discord_motivations_json='')
+    assert len(cfg.discord_motivations) == 5
 
 def test_root_route_is_render_probe_friendly():
     assert home().status_code == 200

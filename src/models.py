@@ -50,3 +50,7 @@ class SourceHealth(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(24), default='unknown')
     baseline_initialized: Mapped[bool] = mapped_column(default=False)
+class AppState(Base):
+    __tablename__='app_state'
+    key: Mapped[str] = mapped_column(String(100),primary_key=True)
+    value: Mapped[str] = mapped_column(String(500),default='')

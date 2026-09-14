@@ -9,7 +9,8 @@ async def main():
     if not url: print('DISCORD_NOT_CONFIGURED'); return 2
     try:
         job=Job(id=0,title='Associate Cloud Engineer',company='Example Technologies',location='Makati · Hybrid',source='Greenhouse Test Fixture',description='',url='https://example.com/jobs/associate-cloud-engineer',application_url=None,score=82,match_reasons=['AWS','Docker','Linux','Entry-level compatible'],warnings=['Terraform preferred'],work_setup='Hybrid',salary=None,date_posted=None,status='NEW')
-        await Discord(url,settings().discord_motivation,settings()).send_payload(Discord(url,settings().discord_motivation,settings()).payload(job,test=True))
+        discord=Discord(url,settings().discord_motivations,settings())
+        await discord.send_payload(discord.payload(job,test=True))
         print('DISCORD_TEST_PASS'); return 0
     except httpx.HTTPError:
         print('DISCORD_TEST_FAIL'); return 1
