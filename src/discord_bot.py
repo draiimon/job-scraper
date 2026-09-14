@@ -280,7 +280,12 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.message.edit(embed=embed,view=self)
             await interaction.followup.send(embed=styled_embed('𝐒𝐊𝐈𝐏𝐏𝐄𝐃','You will no longer receive alerts for this vacancy.'),ephemeral=True)
     def card(job):
-        embed=styled_embed('𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇' if job.score>=85 else '𝐄𝐍𝐓𝐑𝐘-𝐋𝐄𝐕𝐄𝐋 𝐓𝐄𝐂𝐇',f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n{job.location}',url=job.url)
+        posted = discord_timestamp(job.date_posted.isoformat()) if job.date_posted else 'Date unavailable'
+        embed=styled_embed(
+            '𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇' if job.score>=85 else '𝐄𝐍𝐓𝐑𝐘-𝐋𝐄𝐕𝐄𝐋 𝐓𝐄𝐂𝐇',
+            f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n{job.location}\nPosted: {posted}',
+            url=job.url,
+        )
         if job.match_reasons: embed.add_field(name='𝐖𝐇𝐘 𝐈𝐓 𝐅𝐈𝐓𝐒',value='\n'.join(job.match_reasons[:5]),inline=False)
         return embed,JobView(job)
     async def send_jobs(interaction,jobs):
@@ -451,6 +456,10 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             return status
         finally:
             active_searches.discard(user_id)
+            try:
+                await refresh_panel(bump=True)
+            except Exception:
+                log.warning('discord_control_panel_bump_failed')
     async def help_response(interaction):
         embed=styled_embed('𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄','`v!search <role>` — search for recent roles\n`v!latest` — view the newest saved matches\n`v!viewall` — browse all stored matches\n`v!status` — check monitor health\n`v!scan` — run one protected scan\n`v!jobstreet` — connect or manage JobStreet\n`v!help` — show this guide')
         await interaction.response.send_message(embed=embed,ephemeral=True)
@@ -599,14 +608,24 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 panel_channel=bot.get_channel(fetched.channel_id) or await bot.fetch_channel(fetched.channel_id)
         except Exception as exc: log.warning('discord_control_channel_unavailable',extra={'error':str(exc)})
         return panel_channel
-    async def refresh_panel():
+    async def refresh_panel(bump=False):
+        """Keep one control panel; re-post it after result batches when needed.
+
+        Editing a Discord message does not move it to the bottom.  A bump
+        therefore removes the old panel and posts the same persistent panel
+        once after a completed bot batch, never once per countdown tick.
+        """
         channel=await resolve_channel()
         if not channel: return
         message_id=await asyncio.to_thread(repo.state,'discord_bot_control_panel_message_id')
         embed=await panel_embed()
         if message_id:
             try:
-                message=await channel.fetch_message(int(message_id)); await message.edit(embed=embed,view=panel_view); return
+                message=await channel.fetch_message(int(message_id))
+                if not bump:
+                    await message.edit(embed=embed,view=panel_view)
+                    return
+                await message.delete()
             except Exception: await asyncio.to_thread(repo.set_state,'discord_bot_control_panel_message_id',None)
         message=await channel.send(embed=embed,view=panel_view)
         await asyncio.to_thread(repo.set_state,'discord_bot_control_panel_message_id',str(message.id))
@@ -619,10 +638,10 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 outcomes=await manual_scan(); state=await asyncio.to_thread(scheduler_snapshot); duration=int(time.monotonic()-started)
                 text=f"𝐒𝐂𝐀𝐍 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄\nDuration: {duration}s\nSources: {len(outcomes)}\nJobs checked: {state.get('jobs_checked',0)}\nNew matches: {state.get('new_recent_jobs',0)}\nAlerts sent: {state.get('alerts_sent',0)}"
             except Exception as exc: text=str(getattr(exc,'detail','Scan unavailable.'))
-            await refresh_panel()
             if message:
                 try: await message.edit(content=None,embed=styled_embed('𝐒𝐂𝐀𝐍 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄',text))
                 except Exception: pass
+            await refresh_panel(bump=True)
         scan_task=asyncio.create_task(background()); return True
     async def deliver_pending_alerts():
         from sqlalchemy import select
@@ -633,6 +652,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             with repo.sessions() as s:
                 return s.scalars(select(Job.id).where(Job.notification_state=='BOT_PENDING').limit(3)).all()
         ids=await asyncio.to_thread(pending_ids)
+        delivered = False
         for job_id in ids:
             if not await asyncio.to_thread(repo.claim_bot_alert,job_id):
                 continue
@@ -647,6 +667,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 headline=random.choice(cfg.discord_motivations)
                 content=f'<@&{role_id}>\n\n{headline}' if role_id else headline
                 embed,view=card(job); await channel.send(content=content,embed=embed,view=view,allowed_mentions=allowed)
+                delivered = True
                 def mark_sent():
                     with repo.sessions() as s:
                         stored=s.get(Job,job_id)
@@ -662,6 +683,8 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                         if stored and stored.notification_state=='BOT_SENDING': stored.notification_state='FAILED'; s.commit()
                 await asyncio.to_thread(mark_failed)
                 log.warning('discord_bot_alert_failed',extra={'job_id':job_id,'error':str(exc)})
+        if delivered:
+            await refresh_panel(bump=True)
     async def panel_watcher():
         last=None
         while not bot.is_closed():

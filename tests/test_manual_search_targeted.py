@@ -35,6 +35,27 @@ async def test_targeted_ats_search_works_without_linkedin_or_jobstreet(tmp_path,
     assert any(checked == 1 and reviewed == 2 and matches == 1 for checked, reviewed, matches in snapshots)
 
 
+@pytest.mark.asyncio
+async def test_search_does_not_reject_entry_level_job_for_manager_word_in_description(tmp_path, monkeypatch):
+    class ManagerMentionSource:
+        name = "fixture:manager-word"
+
+        async def fetch(self):
+            return [NormalizedJob(
+                self.name, "DevOps Engineer", "Cloud PH", "Manila, Philippines",
+                "Entry-level AWS Docker Linux role. Work with the project manager on deployment updates.",
+                "https://example.com/devops", "devops-manager-word", date_posted=datetime.now(timezone.utc),
+            )]
+
+    monkeypatch.setattr("src.manual_search.configured_sources", lambda _targets: [ManagerMentionSource()])
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/manager-word.db", brightdata_enabled=False)
+    repo = Repository(cfg.database_url); repo.create_schema()
+
+    outcome = await ManualJobSearch(cfg, repo).find_with_progress("DevOps Engineer")
+
+    assert [job.title for job in outcome.jobs] == ["DevOps Engineer"]
+
+
 def test_zero_match_suggestions_use_recent_stored_tech_jobs_without_a_live_scan(tmp_path):
     cfg = Settings(database_url=f"sqlite:///{tmp_path}/suggestions.db", brightdata_enabled=False)
     repo = Repository(cfg.database_url); repo.create_schema()

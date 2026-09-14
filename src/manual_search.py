@@ -137,7 +137,13 @@ class ManualJobSearch:
             return None
         if not self._matches_query(item, role):
             return None
-        if entry_level_only and any(word in text for word in ("senior", "lead", "principal", "manager", "architect", "5+ years", "4+ years")):
+        # Use the central seniority classifier rather than a raw substring
+        # check.  A junior listing can legitimately mention a hiring manager,
+        # project manager, or manager-facing workflow in its description.
+        if entry_level_only and any(
+            warning.startswith("Senior-level") or warning.startswith("Requires")
+            for warning in warnings
+        ):
             return None
         if work_setup and work_setup.lower() not in text and work_setup.lower() not in item.location.lower():
             return None
