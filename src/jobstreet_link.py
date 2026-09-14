@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import secrets
+import base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
@@ -35,9 +36,18 @@ def _digest(token: str) -> str:
 
 
 def _fernet(cfg: Settings) -> Fernet:
-    value = (cfg.jobstreet_session_encryption_key or "").encode("ascii")
+    configured = (cfg.jobstreet_session_encryption_key or "").encode("ascii")
+    # A dedicated key is supported, but requiring another manually managed
+    # secret is unnecessary when the existing application secret is present.
+    # Never store this derived key in the database with the ciphertext.
+    value = configured
+    if not value and cfg.app_secret_key:
+        material = hashlib.sha256(
+            b"after-hours-jobstreet-session-v1\x00" + cfg.app_secret_key.encode("utf-8")
+        ).digest()
+        value = base64.urlsafe_b64encode(material)
     if not value:
-        raise ConnectionError("JobStreet session encryption is not configured.")
+        raise ConnectionError("Set APP_SECRET_KEY or JOBSTREET_SESSION_ENCRYPTION_KEY before connecting JobStreet.")
     try:
         return Fernet(value)
     except (ValueError, TypeError) as exc:
@@ -45,7 +55,7 @@ def _fernet(cfg: Settings) -> Fernet:
 
 
 def browserless_ready(cfg: Settings) -> bool:
-    return bool(cfg.browserless_api_token and cfg.browserless_endpoint and cfg.jobstreet_session_encryption_key)
+    return bool(cfg.browserless_api_token and cfg.browserless_endpoint and (cfg.jobstreet_session_encryption_key or cfg.app_secret_key))
 
 
 def create_request(repo, discord_user_id: int | str, ttl_seconds: int = 600) -> str:

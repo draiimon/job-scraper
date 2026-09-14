@@ -41,3 +41,11 @@ def test_session_is_encrypted_at_rest_and_restores_only_to_private_file(tmp_path
     assert json.loads(path.read_text()) == state
     assert disconnect(repo, 123)
     assert connection_status(cfg, repo, 123) == "AUTH REQUIRED"
+
+
+def test_existing_application_secret_derives_session_encryption_without_a_second_secret(tmp_path):
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/derived.db", app_secret_key="private-app-secret")
+    repo = Repository(cfg.database_url); repo.create_schema()
+    state = {"cookies": [], "origins": []}
+    save_verified_session(cfg, repo, 123, state)
+    assert restore_latest_session(cfg, repo, tmp_path / "runtime.json")
