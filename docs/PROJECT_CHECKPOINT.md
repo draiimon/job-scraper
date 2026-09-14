@@ -22,7 +22,7 @@ After Hours Job Hunter is a Discord-first monitor for recent entry-level Philipp
 
 Commands:
 
-- `v!search <role>` — targeted recent search, with immediate acknowledgement, typing/progress updates, query expansion, cache, cooldown, and no duplicate response.
+- `v!search <role>` — targeted recent search, with immediate acknowledgement, typing/progress updates, query expansion, cache, cooldown, and no duplicate response. If no exact match is found, it offers up to three clearly labeled recent stored alternatives without starting a second scan.
 - `v!latest` — newest qualifying stored matches.
 - `v!viewall` — compact paginated Discord job board. It reads five stored rows at a time and never starts a source scan when changing pages.
 - `v!status` — scheduler, source, database, Discord, LinkedIn, JobStreet, and AI health.

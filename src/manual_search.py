@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
+from sqlalchemy import select
+
 from .brightdata import BrightDataClient, BrightDataJobs
 from .config import Settings
 from .jobs import NormalizedJob, evaluate, freshness, is_ph_location
@@ -103,6 +105,44 @@ class ManualJobSearch:
         if work_setup and work_setup.lower() not in text and work_setup.lower() not in item.location.lower():
             return None
         return score, reasons, warnings
+
+    def suggested_recent_jobs(self, role: str, limit: int = 3) -> list:
+        """Return stored alternatives without silently starting another live scan.
+
+        A zero-result search should still be useful, but these are explicitly
+        profile-qualified alternatives rather than pretending they matched the
+        requested role.  Related title terms rank first, followed by freshness
+        and the existing deterministic profile score.
+        """
+        from .models import Job, JobStatus
+
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        blocked = {
+            JobStatus.EXPIRED.value,
+            JobStatus.IGNORED.value,
+            JobStatus.APPLIED.value,
+            JobStatus.REJECTED.value,
+        }
+        with self.repo.sessions() as session:
+            candidates = session.scalars(
+                select(Job).where(Job.score >= self.cfg.min_notify_score, Job.date_posted.is_not(None))
+            ).all()
+
+        terms = self._query_terms(role)
+
+        def rank(job):
+            posted = job.date_posted
+            if posted and posted.tzinfo is None:
+                posted = posted.replace(tzinfo=timezone.utc)
+            if not posted or posted < cutoff or job.status in blocked:
+                return None
+            title_terms = set(job.title.lower().replace("/", " ").replace("-", " ").split())
+            related = len(title_terms & terms)
+            return related, posted, job.score
+
+        ranked = [(value, job) for job in candidates if (value := rank(job)) is not None]
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        return [job for _value, job in ranked[: max(1, min(int(limit), 3))]]
 
     async def find_with_progress(self, role: str, location="Philippines", freshness_text="Past 24 hours", remote="", limit=10, work_setup="", min_score=0, entry_level_only=True, source_filter="all", progress_callback: ProgressCallback | None = None) -> SearchOutcome:
         started = time.monotonic()

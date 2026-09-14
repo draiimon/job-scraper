@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -33,6 +33,31 @@ async def test_targeted_ats_search_works_without_linkedin_or_jobstreet(tmp_path,
     assert [job.title for job in outcome.jobs] == ["Junior Software Developer"]
     assert outcome.progress.live_available and outcome.progress.sources_checked == 1
     assert any(checked == 1 and reviewed == 2 and matches == 1 for checked, reviewed, matches in snapshots)
+
+
+def test_zero_match_suggestions_use_recent_stored_tech_jobs_without_a_live_scan(tmp_path):
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/suggestions.db", brightdata_enabled=False)
+    repo = Repository(cfg.database_url); repo.create_schema()
+    now = datetime.now(timezone.utc)
+    backend = NormalizedJob(
+        "fixture", "Junior Backend Developer", "Cloud PH", "Manila, Philippines",
+        "Python API development", "https://example.com/backend", "backend", date_posted=now,
+    )
+    cloud = NormalizedJob(
+        "fixture", "Junior Cloud Engineer", "Cloud PH", "Makati, Philippines",
+        "AWS Linux", "https://example.com/cloud", "cloud", date_posted=now,
+    )
+    stale = NormalizedJob(
+        "fixture", "Software Engineer", "Cloud PH", "Manila, Philippines",
+        "Python", "https://example.com/stale", "stale", date_posted=now - timedelta(days=31),
+    )
+    repo.save(backend, 80, ["Python"], [])
+    repo.save(cloud, 85, ["AWS"], [])
+    repo.save(stale, 95, ["Python"], [])
+
+    suggested = ManualJobSearch(cfg, repo).suggested_recent_jobs("Software Engineer")
+
+    assert [job.title for job in suggested] == ["Junior Backend Developer", "Junior Cloud Engineer"]
 
 
 def test_discord_gateway_lease_allows_only_one_owner_and_expires(tmp_path):

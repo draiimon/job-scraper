@@ -368,7 +368,20 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                     embed,view=card(job); await channel.send(embed=embed,view=view)
             else:
                 source_note='Live discovery was unavailable; cached data only was checked.' if not current.live_available else 'Try: Software Developer · Junior Developer · Backend Developer'
-                await status.edit(embed=search_embed(role,current,'𝐍𝐎 𝐑𝐄𝐂𝐄𝐍𝐓 𝐌𝐀𝐓𝐂𝐇𝐄𝐒',f'Qualifying matches: 0\n\n{source_note}'))
+                suggestions=await asyncio.to_thread(manual_search.suggested_recent_jobs,role,3)
+                suggestion_note=(
+                    f'Qualifying matches: 0\n\n{source_note}\n\n'
+                    f'𝐒𝐔𝐆𝐆𝐄𝐒𝐓𝐄𝐃 𝐀𝐋𝐓𝐄𝐑𝐍𝐀𝐓𝐈𝐕𝐄𝐒: {len(suggestions)}'
+                    if suggestions else f'Qualifying matches: 0\n\n{source_note}'
+                )
+                await status.edit(embed=search_embed(role,current,'𝐍𝐎 𝐑𝐄𝐂𝐄𝐍𝐓 𝐌𝐀𝐓𝐂𝐇𝐄𝐒',suggestion_note))
+                if suggestions:
+                    await channel.send(embed=styled_embed(
+                        '𝐒𝐔𝐆𝐆𝐄𝐒𝐓𝐄𝐃 𝐉𝐎𝐁𝐒',
+                        'No exact recent match was found. These are real recent jobs that fit your profile and may be worth checking.',
+                    ))
+                    for job in suggestions:
+                        embed,view=card(job); await channel.send(embed=embed,view=view)
             return status
         except Exception:
             await status.edit(embed=styled_embed('𝐒𝐄𝐀𝐑𝐂𝐇 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄','We could not complete that search. Please try again in a moment.'))
