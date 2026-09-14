@@ -1,0 +1,159 @@
+dapat nga more on automation tayo eh bawal ba chromium sa render na siya nlng gagalaw mag isa?
+
+Pwede. Hindi bawal ang Chromium sa Render. In fact, Render itself has an official Playwright/Chromium deployment template, and Playwright supports running Chromium headlessly in Linux/Docker.
+
+Ang distinction lang:
+
+Kayang gawin ng Render automatically:
+Render → launch Chromium → open JobStreet → use saved authenticated session → search/paginate jobs → extract data → close Chromium → repeat every 15 minutes.
+
+Hindi reliable na gawing fully automatic: Google username/password login + 2FA + CAPTCHA. Kapag humingi ng security challenge, kailangan pa rin ng human interaction. Hindi natin dapat i-bypass iyon.
+
+Mas magandang architecture para sayo
+
+Tanggalin na natin si Browserless entirely:
+
+RENDER
+  ↓
+Playwright + Chromium
+  ↓
+restore encrypted JobStreet session from Supabase
+  ↓
+JobStreet
+  ↓
+search/paginate/extract jobs
+  ↓
+save + dedup + score
+  ↓
+Discord
+
+One-time login lang ang special case:
+
+v!jobstreet
+↓
+CONNECT
+↓
+Render creates Chromium session
+↓
+opens JobStreet
+↓
+if existing session works → READY immediately
+↓
+if login/security challenge needed → AUTH REQUIRED
+
+After makakuha tayo ng authenticated storage state once, Render na lahat ang gagalaw mag-isa. No Browserless fees/session expiry.
+
+Important: Render's filesystem is ephemeral, so hindi dapat doon permanently naka-save cookies/session. Render docs explicitly say local filesystem changes disappear on restart/redeploy/spin-down. Store the encrypted Playwright storage_state in Supabase instead.
+
+Chromium itself
+
+Sa Render Docker build, install natin:
+
+RUN playwright install --with-deps chromium
+
+Then runtime:
+
+browser = await playwright.chromium.launch(
+    headless=True,
+    args=["--no-sandbox"]
+)
+
+Playwright officially supports installing Chromium together with the OS dependencies needed for server environments.
+
+What I recommend
+
+Browserless: remove.
+
+Render Chromium: YES.
+
+Supabase encrypted session: YES.
+
+Automatic JobStreet scanning: YES.
+
+Automatic password/2FA/CAPTCHA bypass: NO.
+
+Once authenticated, though, yung normal scanning is fully automatic 24/7 habang running ang Render service.
+
+Ito yung precise instruction kay Replit:
+
+REPLACE BROWSERLESS WITH DIRECT PLAYWRIGHT CHROMIUM ON RENDER.
+
+Do not use Browserless for JobStreet anymore.
+
+Run Chromium directly inside the existing Render service using Playwright.
+
+TARGET:
+
+Render
+→ launch headless Chromium
+→ restore encrypted JobStreet Playwright storage_state from Supabase
+→ verify authenticated JobStreet session
+→ search/paginate JobStreet
+→ extract jobs
+→ close Chromium
+
+Every 900-second scan should do this automatically when JobStreet status = READY.
+
+REQUIREMENTS:
+
+1. Install Playwright Chromium + Linux dependencies in the Render/Docker build.
+
+2. Chromium must run server-side on Render:
+   headless=True
+   with appropriate container flags such as --no-sandbox where required.
+
+3. NEVER depend on local filesystem persistence.
+   Render filesystem is ephemeral.
+
+4. Store the JobStreet Playwright storage_state encrypted in Supabase.
+
+5. On every JobStreet scan:
+   - decrypt state
+   - create temporary browser context
+   - restore state
+   - verify authentication
+   - perform discovery
+   - save refreshed state if changed
+   - close browser/context
+
+6. If session still valid:
+   JOBSTREET = READY
+   No user action needed.
+
+7. If JobStreet requires login / Google / 2FA / CAPTCHA:
+   JOBSTREET = AUTH REQUIRED
+
+   Do NOT bypass security challenges.
+
+8. Remove Browserless runtime dependency from:
+   - JobStreet scanner
+   - JobStreet auth/session management
+   - required configuration
+
+9. Keep Browserless code only if needed temporarily for backwards compatibility, otherwise remove it cleanly.
+
+10. JobStreet discovery must paginate/batch broad computer-related searches and feed the existing:
+   normalize → 90-day freshness → relevance → seniority → dedup → scoring → Discord pipeline.
+
+11. Actually test on Render-compatible Linux:
+   - Chromium launches
+   - JobStreet loads
+   - stored session restoration works
+   - browser closes cleanly
+   - scheduler remains responsive
+
+Do not touch unrelated features.
+
+REPORT:
+
+DIRECT RENDER CHROMIUM: PASS/FAIL
+BROWSERLESS REQUIRED: NO
+CHROMIUM INSTALL: PASS/FAIL
+JOBSTREET PAGE LOAD: PASS/FAIL
+SESSION RESTORE: PASS/FAIL
+HEADLESS SCAN: PASS/FAIL
+SESSION SAVED TO SUPABASE: PASS/FAIL
+15-MIN JOBSTREET AUTOMATION: PASS/FAIL
+REMAINING MANUAL STEP: [login only / none]
+
+So yes: mas automated pa nga itong direct Chromium-on-Render setup kaysa Browserless. Browserless was only useful for showing you a remote interactive browser; for the actual continuous scanner, direct Playwright on Render is cleaner.

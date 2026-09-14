@@ -1,0 +1,368 @@
+Oo — Chromium itself is free. Ang problema lang: kung nasa Render/Replit ang app, hindi nito kayang magically buksan yung Chromium sa Windows PC mo. Kaya ang cleanest solution na walang Browserless ay:
+
+Discord → private link → local connector → auto-open Playwright Chromium sa PC mo → manual JobStreet login → session securely upload to Render/Supabase → READY.
+
+Hindi na kailangan ng Browserless token/endpoint/session timer.
+
+I-paste mo ito sa bagong Replit:
+
+CONTINUE THE CURRENT UNCOMMITTED WORK. DO NOT RESET IT.
+
+FINISH ONLY THESE TWO FEATURES, THEN WE TEST.
+
+==================================================
+1. PRESERVE VIEWALL APPLY/COVER LETTER FIX
+==================================================
+
+Keep the existing unfinished fix:
+
+v!viewall / v!view all
+→ real paginated stored job board
+→ select/open exact job
+→ APPLY NOW
+→ existing application review
+→ existing tailored cover-letter generator
+→ VIEW COVER LETTER
+→ TXT/PDF
+→ confirmation
+
+Reuse the EXISTING application/cover-letter flow.
+
+Do NOT create a second implementation.
+
+==================================================
+2. REMOVE BROWSERLESS FROM JOBSTREET AUTH
+==================================================
+
+I DO NOT WANT BROWSERLESS FOR JOBSTREET LOGIN ANYMORE.
+
+Remove Browserless dependency from the JobStreet authentication flow.
+
+Do NOT require:
+
+BROWSERLESS_API_TOKEN
+BROWSERLESS_ENDPOINT
+
+for JobStreet authentication.
+
+The production scanner should continue using the encrypted authenticated JobStreet session stored in the database.
+
+==================================================
+3. USE FREE LOCAL PLAYWRIGHT CHROMIUM
+==================================================
+
+Implement a LOCAL WINDOWS CONNECTOR using the existing Playwright package.
+
+Target UX:
+
+v!jobstreet
+→ CONNECT JOBSTREET
+→ immediate Discord ACK
+→ bot sends a PRIVATE/COPYABLE one-time setup URL
+→ setup page offers:
+
+DOWNLOAD WINDOWS CONNECTOR
+
+The connector must be a small temporary .cmd/.ps1 helper generated for this one-time request.
+
+When I run/double-click it:
+
+→ call the local Python JobStreet auth helper
+→ automatically launch Playwright Chromium on MY Windows PC
+→ automatically navigate to the real JobStreet Philippines login page
+→ keep Chromium open
+→ I manually complete Google login / 2FA / CAPTCHA
+→ helper detects successful JobStreet authentication
+→ export Playwright storage_state
+→ securely upload it to the Render setup endpoint using the signed one-time token
+→ Render encrypts/stores the session in Supabase
+→ JobStreet becomes READY
+→ local Chromium closes only AFTER successful upload
+
+NO Browserless.
+NO remote browser timeout.
+
+==================================================
+4. LOCAL CHROMIUM SESSION
+==================================================
+
+The local Chromium login window must stay open until:
+
+- JobStreet authentication succeeds, OR
+- I manually close/cancel it
+
+Do NOT use a 30-second/2-minute remote session timer.
+
+A reasonable safety timeout such as 15–30 minutes is fine, but do not end the session immediately.
+
+Status:
+
+WAITING FOR USER LOGIN
+
+while I am still authenticating.
+
+==================================================
+5. IMPORTANT SECURITY
+==================================================
+
+The generated connector must use a:
+
+- signed
+- short-lived
+- one-time
+- replay-protected
+
+connection token.
+
+Never put these inside the connector:
+
+Google password
+Discord token
+database credentials
+APP_SECRET_KEY
+
+The local helper uploads ONLY the resulting JobStreet browser session to the authenticated setup endpoint.
+
+Render encrypts it before database storage.
+
+The helper/temporary token should become useless after successful connection.
+
+==================================================
+6. NO MANUAL ENV SETUP
+==================================================
+
+I do not want Browserless/environment setup for this flow.
+
+Existing deployment bootstrap secrets such as DATABASE_URL / APP_SECRET_KEY may remain as they already are.
+
+But JobStreet connection must NOT require me to add:
+
+Browserless token
+Browserless endpoint
+JOBSTREET_SESSION_STATE_B64
+separate JobStreet encryption key
+
+Normal flow must be:
+
+CONNECT → local Chromium → login → READY.
+
+==================================================
+7. v!jobstreet UI
+==================================================
+
+Expected:
+
+𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓
+
+Status
+AUTH REQUIRED
+
+[ CONNECT JOBSTREET ]
+[ CHECK CONNECTION ]
+
+After CONNECT:
+
+𝐂𝐎𝐍𝐍𝐄𝐂𝐓 𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓
+
+Private setup URL:
+FULL COPYABLE URL HERE
+
+Open it on the Windows PC where you want to authenticate.
+
+The setup page provides:
+
+[ DOWNLOAD WINDOWS CONNECTOR ]
+
+After successful login:
+
+JobStreet
+READY
+
+[ CHECK CONNECTION ]
+[ REAUTHENTICATE ]
+[ DISCONNECT ]
+
+==================================================
+8. REAUTHENTICATION
+==================================================
+
+If the saved JobStreet session expires:
+
+SESSION EXPIRED
+→ REAUTHENTICATE
+→ generate new one-time connector
+→ local Chromium opens
+→ login again
+→ replace encrypted stored session
+→ READY
+
+==================================================
+9. SCANNER
+==================================================
+
+Once READY:
+
+JobStreet must automatically participate in:
+
+- startup/full scans
+- 900-second / 15-minute scans
+- v!search
+
+No local Chromium is required for normal scanning after authentication.
+
+Use the stored encrypted JobStreet session.
+
+==================================================
+10. FINISH THE INTERRUPTED TEST
+==================================================
+
+The previous Replit session ended while fixing the VIEWALL test harness.
+
+Continue from that exact work.
+
+Run ONLY focused checks needed for:
+
+- VIEWALL APPLY NOW
+- cover letter from VIEWALL
+- JobStreet signed setup
+- generated Windows connector
+- session upload
+- READY state
+- reauthentication
+
+Also run:
+
+python -m compileall -q src
+git diff --check
+
+Do not start another giant project audit.
+
+==================================================
+11. COMMIT + PUSH
+==================================================
+
+When those two features pass:
+
+update docs/PROJECT_CHECKPOINT.md briefly.
+
+Git identity:
+
+Mark Andrei Castillo
+99703880+draiimon@users.noreply.github.com
+
+Commit legitimate files only.
+
+NORMAL push to origin/main.
+
+NO force push.
+
+FINAL RESPONSE ONLY:
+
+VIEWALL APPLY NOW: PASS/FAIL
+COVER LETTER FROM VIEWALL: PASS/FAIL
+
+BROWSERLESS REQUIRED: NO
+LOCAL CHROMIUM CONNECTOR: PASS/FAIL
+COPYABLE SETUP URL: PASS/FAIL
+WINDOWS CONNECTOR DOWNLOAD: PASS/FAIL
+CHROMIUM AUTO-OPEN: PASS/FAIL
+JOBSTREET AUTO-NAVIGATION: PASS/FAIL
+SESSION UPLOAD: PASS/FAIL
+SESSION ENCRYPTION: PASS/FAIL
+JOBSTREET STATUS: READY / WAITING FOR USER LOGIN / FAIL
+REAUTHENTICATION: PASS/FAIL
+15-MIN JOBSTREET SCAN: PASS/FAIL
+
+FOCUSED TESTS: X passed / X failed
+FINAL COMMIT: [hash]
+PUSH: PASS/FAIL
+
+DO NOT TOUCH UNRELATED FEATURES.
+
+Ito ang mas bagay sa setup mo: walang paid/expiring Browserless session. Once lang bubukas yung free local Chromium para mag-login, tapos pagkatapos ma-save yung encrypted JobStreet session sa database, si Render na ulit bahala sa 15-minute scanning.
+
+Tighten the local Chromium prompt
+
+Make the connector flow more direct
+so pano nga yun pano magiging local kung galing sa sa render??? 
+
+Ganito siya: hindi si Render ang mag-o-open ng local Chromium mo. Hindi niya kaya kontrolin yung browser sa Windows PC mo remotely by itself.
+
+Ang tamang architecture ay:
+
+Discord / Render
+      ↓
+v!jobstreet
+      ↓
+Render generates ONE-TIME signed link
+      ↓
+ikaw mag-open nung link sa Windows PC mo
+      ↓
+download/run maliit na local connector
+      ↓
+LOCAL connector launches Chromium sa PC mo
+      ↓
+JobStreet opens automatically
+      ↓
+ikaw manual Google login / 2FA / CAPTCHA
+      ↓
+local connector gets Playwright storage_state
+      ↓
+HTTPS upload pabalik sa Render
+      ↓
+Render encrypts + stores sa Supabase
+      ↓
+JobStreet = READY
+
+So Render = server/coordinator, while your PC = temporary authentication device.
+
+After successful login, hindi na kailangan naka-open PC mo. Yung authenticated session nasa encrypted database na, then si Render na gagamit nun sa scheduled JobStreet scanning.
+
+Paano magiging smooth
+
+Sa Discord:
+
+v!jobstreet
+
+Bot:
+
+𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓
+AUTH REQUIRED
+
+[ CONNECT JOBSTREET ]
+
+Pag click:
+
+Private setup:
+https://your-render-app/connect/jobstreet/ABC123...
+
+Pag binuksan mo sa normal Chrome mo:
+
+CONNECT JOBSTREET
+
+Step 1
+Download Connector
+
+Step 2
+Run it
+
+Step 3
+Chromium will open automatically
+
+Yung connector puwedeng .ps1 / .cmd na automatically runs something like:
+
+python -m src.jobstreet_auth --token <one-time-token>
+
+Then Chromium opens locally, hindi sa Render.
+
+Bakit hindi puwedeng normal Chrome tab lang?
+
+Kung ordinary jobstreet.com tab lang sa Chrome mo, si Render hindi makakakuha ng authenticated cookies/session dahil nasa browser mo yun at protected by browser security.
+
+Kailangan yung login mangyari inside a browser context na controlled by the local Playwright helper. Doon niya makukuha safely yung resulting storage_state, then upload to Render.
+
+So ang magandang final UX:
+
+Render gives you link → one click/run locally → Chromium opens → login → READY → PC no longer needed.
+
+Hindi Browserless, walang mabilis na remote session timeout, at one-time local authentication lang until mag-expire yung JobStreet session.

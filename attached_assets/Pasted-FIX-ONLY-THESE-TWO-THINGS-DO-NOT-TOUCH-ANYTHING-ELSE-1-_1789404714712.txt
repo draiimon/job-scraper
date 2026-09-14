@@ -1,0 +1,80 @@
+FIX ONLY THESE TWO THINGS. DO NOT TOUCH ANYTHING ELSE.
+
+1. v!viewall / JOB BOARD APPLY FLOW
+
+Every job shown in v!viewall / v!view all must have a usable APPLY NOW action.
+
+Flow:
+
+VIEW ALL
+→ select/open job
+→ APPLY NOW
+→ load that exact stored job
+→ generate a tailored cover letter using my saved resume/profile
+→ show APPLICATION REVIEW
+→ VIEW COVER LETTER
+→ DOWNLOAD TXT/PDF
+→ confirmation
+
+Do NOT tell me “use APPLY NOW” unless the button is actually wired and working from the job board.
+
+Reuse the EXISTING cover-letter generator and application flow.
+Do not create a second implementation.
+
+2. FIX v!jobstreet SESSION ENDING
+
+Current problem:
+the Browserless session opens then immediately says:
+
+“Session ended”
+
+Fix the real session lifecycle.
+
+CONNECT JOBSTREET must:
+
+→ ACK Discord immediately
+→ create signed private setup link
+→ create Browserless session
+→ automatically navigate Browserless to the REAL JobStreet login page
+→ automatically open/redirect me to the Browserless LIVE URL in a new tab
+→ keep the browser session alive long enough for manual Google login / 2FA / CAPTCHA
+→ do NOT close Browserless until:
+   - authentication succeeds, OR
+   - a reasonable auth timeout expires
+
+Use something like 10–15 minutes for the interactive login session, not a few seconds.
+
+Important:
+Do NOT redirect me to normal JobStreet outside Browserless, because then the app cannot capture the authenticated browser session.
+
+The link should open directly into the interactive browser already on JobStreet.
+
+After successful login:
+→ verify JobStreet authentication
+→ save encrypted session
+→ close temporary Browserless session
+→ status = READY
+
+If not logged in yet:
+status = WAITING FOR USER LOGIN
+
+Do NOT show “Session ended” immediately.
+
+ONLY FIX THESE TWO FEATURES.
+
+Run only focused tests/checks necessary for these two changes.
+
+Then:
+- commit
+- normal push to origin/main
+
+REPORT ONLY:
+
+VIEWALL APPLY NOW: PASS/FAIL
+COVER LETTER FROM VIEWALL: PASS/FAIL
+JOBSTREET LIVE URL: PASS/FAIL
+JOBSTREET SESSION TIMEOUT: [minutes]
+AUTO REDIRECT TO LIVE BROWSER: PASS/FAIL
+JOBSTREET STATUS: WAITING FOR USER LOGIN / READY / FAIL
+FINAL COMMIT: [hash]
+PUSH: PASS/FAIL
