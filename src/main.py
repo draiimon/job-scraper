@@ -15,8 +15,10 @@ from .applications import eligible_for_email, write_package, revised_cover_lette
 from .ai import gemini
 from .security import ActionTokens
 from .brightdata import brightdata_sources
+from .manual_search import ManualJobSearch
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
 cfg=settings(); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
+manual_search=ManualJobSearch(cfg,repo)
 async def worker():
     while True:
         pipeline.begin_cycle()
@@ -52,6 +54,37 @@ def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
         elif not include_expired: q=q.where(Job.status!=JobStatus.EXPIRED.value)
         return s.scalars(q.order_by(Job.date_discovered.desc()).limit(200)).all()
 class StatusUpdate(BaseModel): status: JobStatus
+class FindRequest(BaseModel):
+    role: str
+    location: str = 'Philippines'
+    freshness: str = 'Past 24 hours'
+    remote: str = ''
+    limit: int = 10
+@app.post('/find')
+async def find_jobs(request: FindRequest):
+    try:
+        result=await manual_search.find(request.role,request.location,request.freshness,request.remote,request.limit)
+        return {'count':len(result),'jobs':result}
+    except Exception as exc:
+        raise HTTPException(503,detail='manual search unavailable; existing sources remain active') from exc
+@app.get('/search',response_class=HTMLResponse)
+def search_page():
+    return HTMLResponse('''<!doctype html><html><head><title>Search latest jobs</title><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><h1>Search latest jobs</h1><form id="search"><label>Role / keyword <input name="role" required placeholder="Junior DevOps"></label><br><label>Location <input name="location" value="Philippines"></label><br><label>Freshness <select name="freshness"><option>Past 24 hours</option><option>Past 3 days</option><option>Past 7 days</option></select></label><br><label>Remote <input name="remote" placeholder="Remote"></label><br><label>Result limit <input name="limit" value="10" min="1" max="10" type="number"></label><br><button>SEARCH</button></form><button id="send" hidden>SEND RESULTS TO DISCORD</button><main id="results"></main><script>let last=[];const out=document.getElementById('results');function show(j){let a=document.createElement('article'),h=document.createElement('h2'),p=document.createElement('p'),d=document.createElement('p'),l=document.createElement('a');h.textContent=j.title;p.textContent=j.company+' · '+j.location;d.textContent='Posted: '+(j.date_posted||'unavailable')+' · '+j.score+'% match';l.textContent='VIEW JOB';l.href=j.url;l.target='_blank';l.rel='noreferrer';a.append(h,p,d,l);out.append(a)}document.getElementById('search').onsubmit=async e=>{e.preventDefault();let f=Object.fromEntries(new FormData(e.target));f.limit=+f.limit;let r=await fetch('/find',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(f)});let d=await r.json();last=d.jobs||[];out.replaceChildren();if(last.length)last.forEach(show);else out.textContent='No recent qualifying jobs found.';document.getElementById('send').hidden=!last.length};document.getElementById('send').onclick=async()=>{let r=await fetch('/search/discord',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jobs:last.map(j=>j.id)})});alert(r.ok?'Results sent to Discord.':'Could not send results.')};</script></body></html>''')
+class DiscordSearchResults(BaseModel): jobs: list[int]
+@app.post('/search/discord')
+async def send_search_results(request: DiscordSearchResults):
+    ids=list(dict.fromkeys(request.jobs))[:10]
+    with repo.sessions() as s: jobs_found=[s.get(Job,job_id) for job_id in ids]
+    sent=0
+    for job in (x for x in jobs_found if x):
+        try:
+            if await pipeline.discord.send_payload(pipeline.discord.payload(job)): sent+=1
+        except Exception as exc: logging.warning('manual_search_discord_failed',extra={'job_id':job.id,'error':str(exc)})
+    return {'sent':sent}
+@app.get('/latest')
+def latest_jobs(limit:int=10):
+    with repo.sessions() as s:
+        return s.scalars(select(Job).where(Job.status!=JobStatus.EXPIRED.value,Job.score>=cfg.min_notify_score,Job.date_posted.is_not(None)).order_by(Job.date_posted.desc()).limit(max(1,min(limit,25)))).all()
 @app.patch('/jobs/{job_id}/status')
 def update_status(job_id:int, update:StatusUpdate):
     with repo.sessions() as s:

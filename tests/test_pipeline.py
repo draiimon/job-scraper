@@ -13,6 +13,8 @@ from src.applications import valid_revision
 from src.main import home
 from src.brightdata import BrightDataClient, BrightDataJobs
 from src.sources import SourceError
+from src.manual_search import ManualJobSearch
+from src.main import search_page
 
 def job(**overrides):
     values=dict(source='test',source_job_id='one',title='Junior DevOps Engineer',company='Cloud PH',location='Taguig, Philippines — Hybrid',description='Fresh graduate AWS Docker Terraform Linux CI/CD Kubernetes.',url='https://example.com/one',date_posted=datetime.now(timezone.utc)-timedelta(hours=2))
@@ -72,6 +74,7 @@ def test_discord_alert_is_compact_and_has_real_link_buttons():
     assert '✅' not in payload['embeds'][0]['fields'][0]['value']
     assert payload['components'][0]['components'][0]['url'] == record.url
     assert any(x['label']=='APPLY NOW' and x['url'].startswith('https://agent.example/actions/') for x in payload['components'][0]['components'])
+    assert any(x['label']=='SEARCH JOBS' and x['url']=='https://agent.example/search' for x in payload['components'][1]['components'])
     assert Discord(None,'',cfg).payload(record,test=True)['components'] == []
 
 def test_signed_actions_expire_and_cannot_be_tampered():
@@ -99,6 +102,31 @@ def test_jobstreet_page_load_budget_is_separate_and_hard_capped(tmp_path):
     assert not repo.reserve_brightdata_page_loads('jobstreet',2,3)
     # A JobStreet page-load stop must not consume or block another source.
     assert repo.reserve_brightdata_page_loads('linkedin_jobs',3,3)
+
+def test_new_source_id_with_newer_timestamp_is_a_repost(tmp_path):
+    repo=Repository(f'sqlite:///{tmp_path}/repost.db'); repo.create_schema()
+    first=job(source='brightdata:linkedin_jobs',source_job_id='old',date_posted=datetime.now(timezone.utc)-timedelta(days=5))
+    score,reasons,warnings,_=evaluate(first); old=repo.save(first,score,reasons,warnings)
+    repost=job(source='brightdata:linkedin_jobs',source_job_id='new',date_posted=datetime.now(timezone.utc)-timedelta(hours=4))
+    score,reasons,warnings,_=evaluate(repost); saved=repo.save(repost,score,reasons,warnings)
+    assert saved.id==old.id and saved.source_job_id=='new' and saved.raw_metadata['reposted']
+
+@pytest.mark.asyncio
+async def test_manual_find_keeps_only_recent_ph_tech_jobs(tmp_path):
+    cfg=Settings(database_url=f'sqlite:///{tmp_path}/manual.db',brightdata_enabled=True,brightdata_api_token='token')
+    repo=Repository(cfg.database_url); repo.create_schema(); search=ManualJobSearch(cfg,repo)
+    async def reply(_input,_limit):
+        return [
+            {'job_posting_id':'fresh','job_title':'IT Support Specialist','company_name':'Cloud PH','job_location':'Manila, Philippines','job_summary':'Fresh graduate Linux technical support','url':'https://example.com/fresh','job_posted_date':datetime.now(timezone.utc).isoformat()},
+            {'job_posting_id':'old','job_title':'IT Support Specialist','company_name':'Cloud PH','job_location':'Manila, Philippines','job_summary':'Linux technical support','url':'https://example.com/old','job_posted_date':(datetime.now(timezone.utc)-timedelta(days=9)).isoformat()},
+        ]
+    search.client.linkedin_discovery=reply
+    found=await search.find('IT Support')
+    assert len(found)==1 and found[0].source_job_id=='fresh'
+
+def test_webhook_only_search_page_has_no_bot_dependency():
+    page=search_page().body.decode()
+    assert '/find' in page and '/search/discord' in page and 'DISCORD_BOT_TOKEN' not in page
 
 def test_default_motivation_pool_is_available():
     cfg=Settings(discord_motivation='',discord_motivations_json='')

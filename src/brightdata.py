@@ -43,6 +43,29 @@ class BrightDataClient:
                 if attempt==self.retries: raise SourceError('Bright Data network failure') from exc
                 await asyncio.sleep(min(30,2**attempt+random.uniform(0,1)))
         raise SourceError('Bright Data request failed')
+    async def linkedin_discovery(self, input_rows:list[dict], limit_per_input:int=10):
+        """Use Bright Data's documented asynchronous LinkedIn discovery flow."""
+        if not input_rows: raise SourceError('Bright Data LinkedIn discovery input is required')
+        params={'dataset_id':'gd_lpfll7v5hcqtkxl6l','include_errors':'true','type':'discover_new','discover_by':'keyword','limit_per_input':str(limit_per_input)}
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response=await client.post('https://api.brightdata.com/datasets/v3/trigger',params=params,headers={'Authorization':f'Bearer {self._token}','Content-Type':'application/json'},json=input_rows)
+                if response.status_code in (401,403): raise SourceError(f'Bright Data authentication rejected ({response.status_code})')
+                response.raise_for_status(); created=response.json(); snapshot_id=created.get('snapshot_id')
+                if not snapshot_id: raise SourceError('Bright Data did not return a LinkedIn snapshot ID')
+                for _ in range(6):
+                    progress=await client.get(f'https://api.brightdata.com/datasets/v3/progress/{snapshot_id}',headers={'Authorization':f'Bearer {self._token}'})
+                    progress.raise_for_status(); status=progress.json().get('status')
+                    if status=='ready':
+                        snapshot=await client.get(f'https://api.brightdata.com/datasets/v3/snapshot/{snapshot_id}',params={'format':'json'},headers={'Authorization':f'Bearer {self._token}'})
+                        snapshot.raise_for_status()
+                        try: return snapshot.json()
+                        except ValueError: return [json.loads(line) for line in snapshot.text.splitlines() if line.strip()]
+                    if status in ('failed','canceled'): raise SourceError(f'Bright Data LinkedIn discovery {status}')
+                    await asyncio.sleep(10)
+            raise SourceError('Bright Data LinkedIn discovery timed out waiting for snapshot')
+        except httpx.HTTPError as exc:
+            raise SourceError('Bright Data LinkedIn discovery request failed') from exc
 class BrightDataJobs(Source):
     def __init__(self,kind:str,dataset_id:str,inputs:list[dict],client:BrightDataClient, repo=None, monthly_page_limit:int=0):
         self.kind=kind; self.name=f'brightdata:{kind}'; self.dataset_id=dataset_id; self.inputs=inputs; self.client=client; self.repo=repo; self.monthly_page_limit=monthly_page_limit
@@ -51,8 +74,7 @@ class BrightDataJobs(Source):
         # LinkedIn dataset. Reserve conservatively before asking Bright Data.
         if self.kind=='jobstreet' and self.repo and not self.repo.reserve_brightdata_page_loads('jobstreet',len(self.inputs),self.monthly_page_limit):
             raise SourceError('Bright Data JobStreet monthly free safety limit reached')
-        discovery={'type':'discover_new','discover_by':'keyword'} if self.kind=='linkedin_jobs' else None
-        data=await self.client.scrape(self.dataset_id,self.inputs,extra_params=discovery)
+        data=await self.client.linkedin_discovery(self.inputs) if self.kind=='linkedin_jobs' and self.dataset_id=='gd_lpfll7v5hcqtkxl6l' else await self.client.scrape(self.dataset_id,self.inputs)
         rows=data if isinstance(data,list) else data.get('data',data.get('results',[]))
         if not isinstance(rows,list): raise SourceError('Bright Data returned an unsupported response shape')
         return [self._normalize(row) for row in rows if isinstance(row,dict) and self._usable(row)]
@@ -63,7 +85,7 @@ class BrightDataJobs(Source):
             if row.get(key): return str(row[key])
         return ''
     def _normalize(self,row):
-        return NormalizedJob(source=self.name,source_job_id=self._pick(row,'id','job_id'),title=self._pick(row,'title','job_title','position'),company=self._pick(row,'company','company_name','employer') or 'Unknown company',location=self._pick(row,'location','job_location'),description=self._pick(row,'description','job_description','snippet'),url=self._pick(row,'url','job_url','apply_url'),application_url=self._pick(row,'apply_url','application_url','url','job_url'),date_posted=parse_date(self._pick(row,'date_posted','posted_at','publication_date')),employment_type=self._pick(row,'employment_type','job_type') or None,raw_metadata={'provider':'brightdata','dataset_kind':self.kind})
+        return NormalizedJob(source=self.name,source_job_id=self._pick(row,'id','job_id','job_posting_id'),title=self._pick(row,'title','job_title','position'),company=self._pick(row,'company','company_name','employer') or 'Unknown company',location=self._pick(row,'location','job_location'),description=self._pick(row,'description','job_description','job_summary','snippet'),url=self._pick(row,'url','job_url','apply_url','apply_link'),application_url=self._pick(row,'apply_url','application_url','apply_link','url','job_url'),date_posted=parse_date(self._pick(row,'date_posted','posted_at','publication_date','job_posted_date')),employment_type=self._pick(row,'employment_type','job_type','job_employment_type') or None,seniority=self._pick(row,'seniority','job_seniority_level') or None,raw_metadata={'provider':'brightdata','dataset_kind':self.kind})
 def brightdata_sources(cfg:Settings, repo=None):
     if not cfg.brightdata_enabled or not cfg.brightdata_api_token: return []
     client=BrightDataClient(cfg.brightdata_api_token); result=[]

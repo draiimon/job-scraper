@@ -27,7 +27,15 @@ class Repository:
     def create_schema(self): Base.metadata.create_all(self.engine)
     def save(self, item: NormalizedJob, score:int, reasons:list[str], warnings:list[str]) -> Job | None:
         with self.sessions() as s:
-            if s.scalar(select(Job).where(Job.fingerprint==item.fingerprint)): return None
+            existing=s.scalar(select(Job).where(Job.fingerprint==item.fingerprint))
+            # A changed source ID plus a genuinely newer source timestamp is a
+            # repost/reactivation, not a duplicate discovery of an old listing.
+            if existing:
+                stored_date=existing.date_posted.replace(tzinfo=timezone.utc) if existing.date_posted and existing.date_posted.tzinfo is None else existing.date_posted
+                repost=(existing.source==item.source and item.source_job_id and item.source_job_id!=existing.source_job_id and item.date_posted and (not stored_date or item.date_posted>stored_date))
+                if not repost: return None
+                existing.source_job_id=item.source_job_id; existing.date_posted=item.date_posted; existing.url=item.url; existing.application_url=item.application_url; existing.description=item.description; existing.score=score; existing.match_reasons=reasons; existing.warnings=warnings; existing.raw_metadata={**item.raw_metadata,'reposted':True}; existing.status=JobStatus.NEW.value; existing.notification_state='PENDING'
+                s.commit(); return existing
             job=Job(fingerprint=item.fingerprint,source=item.source,source_job_id=item.source_job_id,title=item.title,company=item.company,location=item.location,work_setup=item.work_setup,description=item.description,url=item.url,application_url=item.application_url,application_email=item.application_email,salary=item.salary,date_posted=item.date_posted,employment_type=item.employment_type,seniority=item.seniority,skills=extract_skills(item),raw_metadata=item.raw_metadata,score=score,match_reasons=reasons,warnings=warnings)
             s.add(job)
             try: s.commit(); return job
@@ -84,6 +92,9 @@ class Repository:
             rows=s.query(Job).filter(Job.date_posted.is_not(None),Job.date_posted<cutoff,Job.status.notin_([JobStatus.APPLIED.value,JobStatus.OFFER.value,JobStatus.REJECTED.value])).all()
             for job in rows: job.status=JobStatus.EXPIRED.value
             s.commit(); return len(rows)
+    def by_fingerprint(self, fingerprint: str) -> Job | None:
+        with self.sessions() as s:
+            return s.scalar(select(Job).where(Job.fingerprint==fingerprint))
 class Discord:
     def __init__(self,url:str|None, motivations:list[str]|str='', cfg:Settings|None=None): self.url=url; self.motivations=motivations if isinstance(motivations,list) else [motivations]; self.cfg=cfg
     def _link(self,job,action):
@@ -114,6 +125,8 @@ class Discord:
         rows=[{'type':1,'components':row1}]
         actions=[('REVIEW APPLICATION','review'),('SAVE','saved'),('SKIP','ignored')]
         row2=[{'type':2,'style':5,'label':label,'url':url} for label,action in actions if (url:=self._link(job,action))]
+        if self.cfg and self.cfg.public_base_url:
+            row2.append({'type':2,'style':5,'label':'SEARCH JOBS','url':f'{self.cfg.public_base_url.rstrip("/")}/search'})
         if row2: rows.append({'type':1,'components':row2})
         kind,name=(job.source.split(':',1)+[''])[:2] if ':' in job.source else (job.source,'')
         footer=f'{kind.replace("_"," ").title()}' + (f' · {name}' if name else '')

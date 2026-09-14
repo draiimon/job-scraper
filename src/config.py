@@ -39,13 +39,16 @@ class Settings(BaseSettings):
     gemini_concurrency_limit: int = 2
     brightdata_enabled: bool = False
     brightdata_api_token: str | None = None
-    brightdata_linkedin_jobs_dataset_id: str | None = None
+    # Bright Data's documented LinkedIn keyword-discovery dataset. It is only
+    # called when BRIGHTDATA_ENABLED=true and a token is configured.
+    brightdata_linkedin_jobs_dataset_id: str | None = "gd_lpfll7v5hcqtkxl6l"
     brightdata_jobstreet_dataset_id: str | None = None
     brightdata_linkedin_jobs_inputs_json: str = '[]'
     brightdata_jobstreet_inputs_json: str = '[]'
     # JobStreet is billed/limited by page load.  Keep this deliberately below
     # the advertised free allowance unless the operator explicitly changes it.
     brightdata_jobstreet_monthly_page_limit: int = 250
+    brightdata_linkedin_monthly_request_limit: int = 100
 
     @property
     def source_targets(self) -> list[dict]:
