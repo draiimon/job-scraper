@@ -1,0 +1,271 @@
+CONTINUE AND ACTUALLY RUN THE APPLICATION.
+
+Do not only inspect configuration.
+I want YOU to start the app, exercise the JobStreet connection flow, run tests, and fix failures.
+
+IMPORTANT ARCHITECTURE CHANGE:
+
+I DO NOT WANT JOBSTREET/BROWSERLESS CONFIG DEPENDENT ON A LOCAL .env FILE.
+
+Move runtime-managed configuration to Supabase/database-backed configuration.
+
+==================================================
+1. NO LOCAL .env DEPENDENCY
+==================================================
+
+Do not require me to maintain:
+
+BROWSERLESS_ENDPOINT
+JOBSTREET_SESSION_ENCRYPTION_KEY
+JOBSTREET_SESSION_STATE_B64
+
+inside a local .env file.
+
+Use database-backed configuration instead.
+
+.env.example may remain documentation only.
+
+Never commit a real .env.
+
+==================================================
+2. DATABASE CONFIG MODEL
+==================================================
+
+Create/use a configuration table for NON-SECRET values, for example:
+
+app_settings
+
+key
+value
+updated_at
+
+Examples:
+
+browserless_endpoint
+jobstreet_enabled
+jobstreet_last_verified
+jobstreet_status
+
+Initialize safe defaults automatically when missing.
+
+For Browserless endpoint, use the official/default endpoint already supported by the implementation unless database configuration overrides it.
+
+==================================================
+3. SECRET STORAGE
+==================================================
+
+DO NOT store plaintext secrets in normal database columns.
+
+Use Supabase Vault / database encrypted secret storage for:
+
+BROWSERLESS_API_TOKEN
+JobStreet encryption master material
+other connection secrets if required
+
+On first startup:
+
+if JobStreet encryption secret does not exist
+→ securely generate one
+→ store it in Vault
+→ reuse the SAME value permanently
+
+DO NOT generate a new key every restart.
+
+The encrypted JobStreet browser session remains in the normal connection table, but the encryption key must NOT be stored beside it.
+
+==================================================
+4. BOOTSTRAP REALITY
+==================================================
+
+The application may still use the EXISTING Render/Supabase bootstrap credentials needed to connect to the database.
+
+That is fine.
+
+But after database connection is established:
+
+Browserless / JobStreet configuration must load automatically from database/Vault.
+
+The goal is:
+
+Render starts
+→ connects to Supabase
+→ loads config automatically
+→ loads/decrypts required secret from Vault
+→ JobStreet integration works
+
+No copying giant Base64 sessions into Render every time.
+
+==================================================
+5. BROWSERLESS TOKEN
+==================================================
+
+I already provided/configured BROWSERLESS_API_TOKEN previously.
+
+If it currently exists in runtime configuration:
+
+migrate/store it securely into Supabase Vault WITHOUT printing its value.
+
+Then runtime should prefer Vault/database-backed configuration.
+
+Never log the token.
+
+If migration cannot be automated safely, report exactly why.
+
+==================================================
+6. JOBSTREET CONNECTION FLOW
+==================================================
+
+Finish:
+
+v!jobstreet
+→ CONNECT JOBSTREET
+→ signed short-lived private URL
+→ Browserless interactive browser
+→ I manually log into JobStreet / Google
+→ I manually handle 2FA/CAPTCHA
+→ verify session
+→ encrypt session
+→ save encrypted session in Supabase
+→ JobStreet READY
+
+Then:
+
+every 900 seconds
+→ restore JobStreet session
+→ verify it
+→ search jobs
+→ close temporary browser
+→ continue normal pipeline
+
+No Base64 copying after normal account linking.
+
+==================================================
+7. ACTUALLY RUN IT
+==================================================
+
+Do not stop at unit tests.
+
+Start the application using the project's REAL existing start command.
+
+Verify:
+
+APPLICATION STARTS
+DATABASE CONNECTS
+DISCORD CONNECTS
+SCHEDULER STARTS
+BROWSERLESS CLIENT INITIALIZES
+v!jobstreet ROUTES REGISTER
+SETUP PAGE LOADS
+NO STARTUP CRASH
+
+If Replit cannot interact with Discord directly, still start the real service and exercise the HTTP/setup endpoints locally.
+
+==================================================
+8. TEST BROWSERLESS FOR REAL
+==================================================
+
+Make a harmless Browserless connectivity check.
+
+Do NOT expose the token.
+
+Verify:
+
+Browserless websocket/CDP connection succeeds
+temporary browser launches
+page navigation works
+browser closes cleanly
+
+Do NOT log into Google automatically.
+
+For the actual login step, wait for my manual interaction.
+
+==================================================
+9. DATABASE AUTO-INITIALIZATION
+==================================================
+
+On startup, automatically ensure required database objects/config exist.
+
+Safe idempotent initialization only.
+
+Do not destroy existing data.
+
+Desired behavior:
+
+fresh deployment
+→ config rows created if absent
+→ Vault secret generated if absent
+→ existing encrypted JobStreet connection preserved
+→ app starts normally
+
+==================================================
+10. SECURITY
+==================================================
+
+Never print/store plaintext:
+
+Browserless token
+Google password
+2FA code
+CAPTCHA response
+JobStreet cookies
+storage_state
+encryption secret
+Discord token
+webhook token
+
+Do not commit any of these.
+
+==================================================
+11. RUN EVERYTHING
+==================================================
+
+Run:
+
+pytest -q
+python -m compileall -q src
+git diff --check
+
+Then START THE REAL APPLICATION and verify startup.
+
+Fix any legitimate failure.
+
+==================================================
+12. FINALIZE
+==================================================
+
+When everything works:
+
+update README.md
+update docs/PROJECT_CHECKPOINT.md
+
+Use Git identity:
+
+Mark Andrei Castillo
+99703880+draiimon@users.noreply.github.com
+
+Commit legitimate files only.
+
+NORMAL push to origin/main.
+
+Then verify Render deploy if available.
+
+FINAL RESPONSE:
+
+DATABASE-BACKED CONFIG: PASS/FAIL
+LOCAL .env REQUIRED FOR JOBSTREET: NO/YES
+BROWSERLESS TOKEN STORAGE: VAULT/OTHER
+BROWSERLESS CONNECTION TEST: PASS/FAIL
+AUTO ENCRYPTION KEY CREATION: PASS/FAIL
+ENCRYPTION KEY PERSISTENCE: PASS/FAIL
+v!jobstreet: PASS/FAIL
+SIGNED CONNECT LINK: PASS/FAIL
+SETUP PAGE: PASS/FAIL
+INTERACTIVE BROWSER: PASS/FAIL
+SESSION STORAGE: PASS/FAIL
+15-MIN JOBSTREET SCAN: PASS/FAIL
+APPLICATION STARTUP: PASS/FAIL
+DISCORD: PASS/FAIL
+TESTS: X passed / X failed
+FINAL COMMIT: [hash]
+PUSH: PASS/FAIL
+REMAINING MANUAL STEP: [exact step or NONE]

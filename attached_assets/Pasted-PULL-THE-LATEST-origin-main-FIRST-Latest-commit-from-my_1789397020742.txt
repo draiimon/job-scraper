@@ -1,0 +1,208 @@
+PULL THE LATEST origin/main FIRST.
+
+Latest commit from my local Codex work:
+
+101532f
+"WIP: finish JobStreet session encryption setup"
+
+DO NOT reset, revert, or discard this commit.
+
+Codex ran out of usage while finishing the JobStreet Bloxlink-style connection flow.
+
+Continue EXACTLY from the existing implementation.
+
+==================================================
+CURRENT PARTIAL WORK
+==================================================
+
+Codex changed:
+
+- .env.example
+- src/jobstreet_link.py
+- tests/test_jobstreet_link.py
+
+The intended change is:
+
+DO NOT require a separate:
+JOBSTREET_SESSION_ENCRYPTION_KEY
+
+Instead derive the JobStreet session encryption key automatically and deterministically from the existing private:
+
+APP_SECRET_KEY
+
+APP_SECRET_KEY must remain an environment secret.
+
+Supabase must store ONLY the encrypted JobStreet session.
+
+Never store:
+- APP_SECRET_KEY
+- derived encryption key
+- plaintext cookies/session
+- Google credentials
+- Browserless token
+
+The derived key must remain stable across Render restarts/deploys.
+
+If APP_SECRET_KEY is missing:
+FAIL CLOSED.
+Do not generate a temporary random key.
+
+Use domain separation such as:
+
+after-hours-jobstreet-session-v1
+
+==================================================
+BROWSERLESS
+==================================================
+
+BROWSERLESS_API_TOKEN is already configured.
+
+Check whether:
+
+BROWSERLESS_ENDPOINT
+
+is configured in the actual environment.
+
+If not, use a documented safe default only if the existing implementation supports one.
+
+Do not guess account-specific configuration.
+
+==================================================
+JOBSTREET TARGET FLOW
+==================================================
+
+Complete the existing Bloxlink-style flow:
+
+v!jobstreet
+→ CONNECT JOBSTREET
+→ signed short-lived one-time link
+→ private setup page
+→ Browserless interactive browser
+→ I manually sign in to JobStreet / Google
+→ I manually handle 2FA/CAPTCHA
+→ verify authenticated JobStreet session
+→ encrypt storage state
+→ save encrypted session in Supabase
+→ JobStreet = READY
+→ automatic 15-minute scans use JobStreet
+
+Also support:
+
+CHECK CONNECTION
+REAUTHENTICATE
+DISCONNECT
+
+Never automate Google password entry.
+Never bypass CAPTCHA/2FA/anti-bot challenges.
+
+==================================================
+LEGACY SUPPORT
+==================================================
+
+Keep JOBSTREET_SESSION_STATE_B64 as a legacy fallback if it already exists.
+
+Preferred production path is now the Discord account-linking flow.
+
+==================================================
+VERIFY THE PARTIAL CODE
+==================================================
+
+First run:
+
+git status --short
+git log -1 --oneline
+git show --stat 101532f
+
+Then inspect the current JobStreet linking implementation before editing.
+
+Do not rebuild it from scratch.
+
+==================================================
+TESTS
+==================================================
+
+Verify:
+
+- same APP_SECRET_KEY derives same encryption key
+- different APP_SECRET_KEY derives different key
+- encryption/decryption roundtrip
+- plaintext session never stored
+- encryption key never stored in Supabase
+- missing APP_SECRET_KEY fails safely
+- signed setup links expire
+- replayed links rejected
+- connection becomes READY after verified auth
+- reauthentication works
+- disconnect clears stored session
+- JobStreet joins v!search only when READY
+- JobStreet joins 15-minute scans only when READY
+- public ATS continues if JobStreet fails
+- secrets never appear in logs
+- legacy B64 fallback still works
+
+Run:
+
+pytest -q
+python -m compileall -q src
+git diff --check
+
+ALL tests must pass.
+
+==================================================
+DOCUMENTATION
+==================================================
+
+Update:
+
+README.md
+docs/PROJECT_CHECKPOINT.md
+
+Document the final JobStreet connection architecture and that APP_SECRET_KEY now derives the encryption key automatically.
+
+Do not document secret values.
+
+==================================================
+FINALIZE + PUSH
+==================================================
+
+After verification:
+
+- review git status
+- do NOT commit .env, cookies, session files, Pasted-* files, private documents, or tokens
+- use repo-local Git identity:
+
+Mark Andrei Castillo
+99703880+draiimon@users.noreply.github.com
+
+Create one clean follow-up commit for any remaining fixes.
+
+NORMAL push to:
+
+origin/main
+
+No force push.
+
+Then verify Render deployment if accessible.
+
+FINAL RESPONSE:
+
+LATEST BASE COMMIT: 101532f
+APP_SECRET_KEY DERIVATION: PASS/FAIL
+SEPARATE ENCRYPTION ENV NEEDED: YES/NO
+BROWSERLESS TOKEN: CONFIGURED/MISSING
+BROWSERLESS ENDPOINT: CONFIGURED/DEFAULTED/MISSING
+v!jobstreet: PASS/FAIL
+SIGNED LINK FLOW: PASS/FAIL
+INTERACTIVE LOGIN: PASS/FAIL
+SESSION ENCRYPTION: PASS/FAIL
+SUPABASE SESSION STORAGE: PASS/FAIL
+REAUTH: PASS/FAIL
+DISCONNECT: PASS/FAIL
+15-MIN JOBSTREET SOURCE: PASS/FAIL
+v!search JOBSTREET SOURCE: PASS/FAIL
+ATS FALLBACK: PASS/FAIL
+TESTS: X passed / X failed
+CHECKPOINT UPDATED: YES/NO
+FINAL COMMIT: [hash]
+PUSH: PASS/FAIL
+REMAINING REQUIREMENT: [exact item or NONE]
