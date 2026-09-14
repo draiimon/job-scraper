@@ -294,7 +294,15 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             lines.append(f'`{number:02}  {posted}  ·  {job.score}% MATCH`\n**{job.title}**\n{job.company} · {location}')
         body='\n\n'.join(lines) if lines else 'No recent qualifying jobs are stored yet.'
         embed=styled_embed('𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃',f'Recent stored matches · newest posted first\n\n{body}')
-        embed.add_field(name='𝐍𝐀𝐕𝐈𝐆𝐀𝐓𝐈𝐎𝐍',value=f'Page {page+1} of {pages} · {total} stored matches',inline=False)
+        embed.add_field(
+            name='𝐍𝐀𝐕𝐈𝐆𝐀𝐓𝐈𝐎𝐍',
+            value=(
+                f'Page {page+1} of {pages} · {total} stored matches\n'
+                'Page changes are instant and use stored results only. '
+                'Use SCAN NOW for a live refresh with progress.'
+            ),
+            inline=False,
+        )
         return embed,pages
     class ViewAllJobsView(discord.ui.View):
         def __init__(self,jobs,page=0,total_pages=1):
