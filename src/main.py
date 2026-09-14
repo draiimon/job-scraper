@@ -85,6 +85,13 @@ async def worker():
         except (TypeError, ValueError):
             delay=cfg.poll_interval_seconds
         await asyncio.sleep(delay)
+def discord_task_done(task):
+    if task.cancelled(): return
+    error=task.exception()
+    if error:
+        logging.error('discord_bot_task_failed',extra={'error':str(error)},exc_info=(type(error),error,error.__traceback__))
+    else:
+        logging.warning('discord_bot_stopped')
 @asynccontextmanager
 async def lifespan(app):
     repo.create_schema(); repo.expire_stale_jobs()
@@ -94,6 +101,7 @@ async def lifespan(app):
     except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
     task=asyncio.create_task(worker()) if cfg.polling_enabled else None
     bot_task=asyncio.create_task(run_discord_bot(cfg,repo,manual_search,scheduler_snapshot,manual_scan)) if cfg.discord_bot_token else None
+    if bot_task: bot_task.add_done_callback(discord_task_done)
     yield
     if task: task.cancel()
     if bot_task:
