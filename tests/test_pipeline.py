@@ -60,7 +60,15 @@ def test_safe_application_materials():
     record=Fake(); record.title='Junior Cloud Engineer'; record.company='Cloud PH'; record.description='AWS Terraform Docker Linux'; record.score=90; record.application_email='jobs@example.com'; record.warnings=[]
     assert eligible_for_email(record,85)[0]
     letter=cover_letter(record)
-    assert 'AWS' in letter and 'years of experience' not in letter
+    assert 'AWS' in letter and 'years of experience' not in letter and 'entry-level' not in letter.lower()
+
+def test_cover_letter_is_neutral_for_non_entry_level_roles():
+    class Fake: pass
+    record=Fake(); record.title='Senior Cloud Platform Engineer'; record.company='Cloud PH'; record.description='AWS Terraform Docker Linux'; record.score=90; record.application_email='jobs@example.com'; record.warnings=[]
+    letter=cover_letter(record)
+    assert 'Senior Cloud Platform Engineer' in letter
+    assert 'entry-level' not in letter.lower()
+    assert 'practical learning' not in letter.lower()
 
 def test_cover_letter_uses_uploaded_resume_evidence():
     class Fake: pass

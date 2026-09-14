@@ -30,11 +30,11 @@ def cover_letter(job: Job, resume_text: str | None = None) -> str:
         project_text=(project_text+'; ' if project_text else '')+evidence_text
     return f'''Dear Hiring Team,
 
-I am applying for the {job.title} role at {job.company}. I am interested in building and supporting reliable cloud and infrastructure systems, and this entry-level opportunity aligns with my hands-on project work.
+I am applying for the {job.title} role at {job.company}. I am interested in building and supporting reliable cloud and infrastructure systems, and this opportunity aligns with my hands-on experience and project work.
 
 {skills_sentence} {('Relevant work includes '+project_text+'.') if project_text else ''}
 
-I would welcome the opportunity to discuss how my practical learning and project experience can support your team. Thank you for your consideration.
+I would welcome the opportunity to discuss how my experience and project work can support your team. Thank you for your consideration.
 
 Sincerely,
 [Your Name]
