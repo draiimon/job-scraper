@@ -4,7 +4,7 @@ Self-hosted, deterministic job monitor for entry-level Philippine DevOps, cloud,
 
 ## Cost model
 
-The core is free-first: SQLite or any standard PostgreSQL (including Supabase/Neon free tiers), public Greenhouse/Lever/Ashby endpoints, normal HTTP requests, local deterministic scoring, and Discord webhooks. It has no paid API, proxy, scraping service, or LLM dependency. PostgreSQL is selected solely with `DATABASE_URL` (for example `postgresql+psycopg://...` after installing a PostgreSQL driver); no Supabase-specific feature is used.
+The core is free-first: SQLite or any standard PostgreSQL (including Supabase/Neon free tiers), public Greenhouse/Lever/Ashby endpoints, normal HTTP requests, local deterministic scoring, and Discord webhooks. It has no paid API, proxy, scraping service, or LLM dependency. Standard Supabase `postgresql://...` URLs are automatically routed through the bundled `psycopg` v3 driver; no Supabase-specific feature is used.
 
 AI is disabled by default and is not implemented in the monitoring path. The `AI_*` configuration fields reserve an optional provider-neutral extension point, with a default request cap. Any future provider must use deterministic prefiltering, fingerprint caching, daily limits, and a no-AI fallback.
 

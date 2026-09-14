@@ -13,6 +13,12 @@ from .security import ActionTokens
 log=logging.getLogger(__name__)
 class Repository:
     def __init__(self, url: str):
+        # Supabase commonly supplies postgresql:// URLs; explicitly select the
+        # bundled psycopg v3 dialect instead of SQLAlchemy's psycopg2 default.
+        if url.startswith('postgresql://'):
+            url='postgresql+psycopg://'+url.removeprefix('postgresql://')
+        elif url.startswith('postgres://'):
+            url='postgresql+psycopg://'+url.removeprefix('postgres://')
         if url.startswith('sqlite:///') and not url.startswith('sqlite:////'):
             Path(url.removeprefix('sqlite:///')).parent.mkdir(parents=True, exist_ok=True)
         connect_args={'check_same_thread':False} if url.startswith('sqlite') else {}

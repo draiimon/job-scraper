@@ -76,6 +76,10 @@ def test_ai_revision_validator_rejects_fabricated_claims():
     assert not valid_revision('A'*350+' I have 5 years of experience.')
     assert not valid_revision('A'*350+' I am AWS certified.')
 
+def test_supabase_postgres_url_uses_installed_psycopg_driver():
+    repo=Repository('postgresql://user:password@example.com:5432/database')
+    assert repo.engine.url.drivername == 'postgresql+psycopg'
+
 @pytest.mark.asyncio
 async def test_gemini_429_uses_pool_cooldown_and_cache():
     manager=GeminiManager(Settings(ai_enabled=True,cover_letter_mode='ai',gemini_max_retries=0))
