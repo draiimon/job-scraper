@@ -31,6 +31,12 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         if not value: return '—'
         try: return datetime.fromisoformat(value).astimezone(ZoneInfo('Asia/Manila')).strftime('%I:%M %p')
         except ValueError: return '—'
+    def set_bot_footer(embed):
+        footer={'text':'After Hours Job Hunter • Made by masoncalix'}
+        avatar=getattr(getattr(bot,'user',None),'display_avatar',None)
+        if avatar: footer['icon_url']=str(avatar.url)
+        embed.set_footer(**footer)
+        return embed
     def panel_embed():
         state=scheduler_snapshot(); scanning=state.get('phase')=='scanning'
         embed=discord.Embed(title='𝐀𝐅𝐓𝐄𝐑 𝐇𝐎𝐔𝐑𝐒 𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑',description='Your automated Philippine tech-job monitor is online.',colour=0xF59E0B)
@@ -38,7 +44,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         embed.add_field(name='𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐈𝐎𝐍𝐒',value=f"Sources\n{state.get('sources_working',0)} active\n\nLinkedIn\n{state.get('linkedin_status')}\n\nJobStreet\n{state.get('jobstreet_status')}\n\nDatabase\nCONNECTED\n\nDiscord\nCONNECTED",inline=True)
         embed.add_field(name='𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆 𝐍𝐎𝐖' if scanning else '𝐒𝐂𝐀𝐍 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄',value='Checking recent active jobs…' if scanning else f"Jobs checked: {state.get('jobs_checked',0)}\nNew qualifying jobs: {state.get('new_recent_jobs',0)}\nAlerts sent: {state.get('alerts_sent',0)}",inline=False)
         embed.add_field(name='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',value='Use **SEARCH JOBS**, type `v!search Junior DevOps`, or type `v!resume` to replace the saved resume.',inline=False)
-        embed.set_footer(text='After Hours Job Hunter • Made by masoncalix')
+        set_bot_footer(embed)
         return embed
     class ReviewView(discord.ui.View):
         def __init__(self, job_id): super().__init__(timeout=900); self.job_id=job_id
@@ -131,14 +137,14 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
     def card(job):
         embed=discord.Embed(title='𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇' if job.score>=85 else '𝐄𝐍𝐓𝐑𝐘-𝐋𝐄𝐕𝐄𝐋 𝐓𝐄𝐂𝐇',description=f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n{job.location}',colour=0xF59E0B,url=job.url)
         if job.match_reasons: embed.add_field(name='𝐖𝐇𝐘 𝐈𝐓 𝐅𝐈𝐓𝐒',value='\n'.join(job.match_reasons[:5]),inline=False)
-        embed.set_footer(text='After Hours Job Hunter • Made by masoncalix')
+        set_bot_footer(embed)
         return embed,JobView(job)
     async def send_jobs(interaction,jobs):
         if not jobs: await interaction.followup.send('No recent qualifying jobs found.',ephemeral=True); return
         for job in jobs[:3]:
             embed,view=card(job); await interaction.followup.send(embed=embed,view=view,ephemeral=True)
     async def help_response(interaction):
-        embed=discord.Embed(title='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',description='`v!search <role>` — latest roles\n`v!latest` — newest stored jobs\n`v!status` — monitor health\n`v!scan` — one protected scan\n`v!help` — this guide',colour=0xF59E0B); embed.set_footer(text='After Hours Job Hunter • Made by masoncalix')
+        embed=discord.Embed(title='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',description='`v!search <role>` — latest roles\n`v!latest` — newest stored jobs\n`v!status` — monitor health\n`v!scan` — one protected scan\n`v!help` — this guide',colour=0xF59E0B); set_bot_footer(embed)
         await interaction.response.send_message(embed=embed,ephemeral=True)
     class SearchModal(discord.ui.Modal,title='Find recent jobs'):
         role=discord.ui.TextInput(label='Job role / keyword',placeholder='Junior DevOps',max_length=100)
@@ -248,7 +254,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         command,_,argument=message.content[2:].strip().partition(' '); command=command.lower(); argument=argument.strip()
         if command=='help':
             class Fake: pass
-            await message.channel.send(embed=discord.Embed(title='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',description='`v!search <role>`\n`v!latest`\n`v!status`\n`v!scan`\n`v!help`',colour=0xF59E0B)); return
+            embed=discord.Embed(title='𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄',description='`v!search <role>`\n`v!latest`\n`v!status`\n`v!scan`\n`v!help`',colour=0xF59E0B); set_bot_footer(embed); await message.channel.send(embed=embed); return
         if command=='resume':
             token=ActionTokens(cfg).issue_control('resume')
             if not token or not cfg.public_base_url:
