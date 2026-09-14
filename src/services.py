@@ -1,13 +1,13 @@
 from __future__ import annotations
 import asyncio, logging, random
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import httpx
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings
-from .jobs import NormalizedJob, evaluate, extract_skills, is_ph_location
+from .jobs import NormalizedJob, evaluate, extract_skills, is_ph_location, freshness, is_active_listing
 from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState
 from .security import ActionTokens
 log=logging.getLogger(__name__)
@@ -58,6 +58,12 @@ class Repository:
             count=int(state.value)
             if count>=limit: s.commit(); return False
             state.value=str(count+1); s.commit(); return True
+    def expire_stale_jobs(self):
+        cutoff=datetime.now(timezone.utc)-timedelta(days=30)
+        with self.sessions() as s:
+            rows=s.query(Job).filter(Job.date_posted.is_not(None),Job.date_posted<cutoff,Job.status.notin_([JobStatus.APPLIED.value,JobStatus.OFFER.value,JobStatus.REJECTED.value])).all()
+            for job in rows: job.status=JobStatus.EXPIRED.value
+            s.commit(); return len(rows)
 class Discord:
     def __init__(self,url:str|None, motivations:list[str]|str='', cfg:Settings|None=None): self.url=url; self.motivations=motivations if isinstance(motivations,list) else [motivations]; self.cfg=cfg
     def _link(self,job,action):
@@ -65,14 +71,14 @@ class Discord:
         token=ActionTokens(self.cfg).issue(job.id,action)
         return f'{self.cfg.public_base_url.rstrip("/")}/actions/{token}' if token else None
     def payload(self, job: Job, test=False):
-        label='High match' if job.score>=85 else 'New entry-level tech job'
+        label='𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇' if job.score>=85 else '𝐄𝐍𝐓𝐑𝐘-𝐋𝐄𝐕𝐄𝐋 𝐓𝐄𝐂𝐇'
         details=[job.location or 'Location not stated']
         if job.work_setup and job.work_setup.lower() not in (job.location or '').lower(): details.append(job.work_setup)
         if job.salary: details.append(job.salary)
         if job.date_posted: details.append(f'Posted {job.date_posted.date().isoformat()}')
-        match='\n'.join(f'• {x}' for x in job.match_reasons[:5]) or '• Entry-level technology role'
-        fields=[{'name':'Why it matches','value':match,'inline':False}]
-        if job.warnings: fields.append({'name':'Notes','value':'\n'.join(f'• {x}' for x in job.warnings[:2]),'inline':False})
+        match='\n'.join(job.match_reasons[:6]) or 'Entry-level technology role'
+        fields=[{'name':'𝐖𝐇𝐘 𝐈𝐓 𝐅𝐈𝐓𝐒','value':match,'inline':False}]
+        if job.warnings: fields.append({'name':'𝐍𝐎𝐓𝐄𝐒','value':'\n'.join(job.warnings[:2]),'inline':False})
         row1=[{'type':2,'style':5,'label':'VIEW JOB','url':job.url}]
         review=self._link(job,'review')
         if review and job.status not in ('APPLIED','IGNORED'):
@@ -81,9 +87,11 @@ class Discord:
         actions=[('GENERATE COVER LETTER','generate'),('MARK APPLIED','applied'),('SAVE','saved'),('SKIP','ignored'),('REMIND ME','remind')]
         row2=[{'type':2,'style':5,'label':label,'url':url} for label,action in actions if (url:=self._link(job,action))]
         if row2: rows.append({'type':1,'components':row2})
-        footer=f'{job.source} · Ready to apply'
+        kind,name=(job.source.split(':',1)+[''])[:2] if ':' in job.source else (job.source,'')
+        footer=f'{kind.replace("_"," ").title()}' + (f' · {name}' if name else '')
         if test: footer='𝐓𝐄𝐒𝐓 𝐀𝐋𝐄𝐑𝐓 — No real application will be sent.'
-        return {'content':random.choice(self.motivations),'embeds':[{'title':f'🔔 {label} · {job.score}%','description':f'**{job.title}**\n{job.company}\n\n'+' · '.join(details),'url':job.url,'fields':fields,'footer':{'text':footer}}],'components':[] if test else rows}
+        fields.append({'name':'𝐒𝐓𝐀𝐓𝐔𝐒','value':'Ready to review' if job.status not in ('APPLIED','IGNORED') else job.status.title(),'inline':False})
+        return {'content':random.choice(self.motivations),'embeds':[{'title':label,'description':f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n\n'+' · '.join(details),'url':job.url,'fields':fields,'footer':{'text':footer}}],'components':[] if test else rows}
     async def send(self,job):
         if not self.url: return 'SKIPPED'
         return await self.send_payload(self.payload(job))
@@ -95,9 +103,10 @@ class Discord:
 class Pipeline:
     def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock()
     async def process(self, item:NormalizedJob, notify=True) -> tuple[Job|None,bool]:
-        if not is_ph_location(item): return None, False
+        if not is_ph_location(item) or not is_active_listing(item): return None, False
         score,reasons,warnings,relevant=evaluate(item)
-        if not relevant: return None, False
+        _,_,fresh=freshness(item)
+        if not relevant or not fresh or (freshness(item)[0] < 0 and score < 85): return None, False
         job=self.repo.save(item,score,reasons,warnings)
         if not job: return None, True
         if notify and score>=self.config.min_notify_score: await self.notify(job)

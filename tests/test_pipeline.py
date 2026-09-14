@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import pytest
 from src.config import Settings
-from src.jobs import NormalizedJob, evaluate, is_ph_location
+from src.jobs import NormalizedJob, evaluate, is_ph_location, freshness
 from src.services import Pipeline, Repository
 from src.applications import cover_letter, eligible_for_email
 from src.email_alerts import alert_to_job
@@ -26,6 +26,10 @@ def test_location_filter():
     assert is_ph_location(job())
     assert not is_ph_location(job(location='New York, United States'))
     assert not is_ph_location(job(location='Remote — worldwide'))
+
+def test_stale_jobs_never_pass_freshness_gate():
+    points,reason,active=freshness(job(date_posted=datetime.now(timezone.utc)-timedelta(days=31)))
+    assert not active and points == -100 and 'Stale' in reason
 
 def test_broad_technology_role_is_eligible_but_senior_is_not():
     support=job(title='IT Support Specialist',description='Fresh graduate opportunity supporting Windows, Linux, networks, and technical users.')
@@ -62,7 +66,7 @@ def test_discord_alert_is_compact_and_has_real_link_buttons():
     cfg=Settings(app_secret_key='test-secret',public_base_url='https://agent.example')
     payload=Discord(None,'Apply now!',cfg).payload(record)
     assert payload['content'] == 'Apply now!'
-    assert payload['embeds'][0]['title'] == '🔔 High match · 87%'
+    assert payload['embeds'][0]['title'] == '𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇'
     assert '✅' not in payload['embeds'][0]['fields'][0]['value']
     assert payload['components'][0]['components'][0]['url'] == record.url
     assert any(x['label']=='APPLY NOW' and x['url'].startswith('https://agent.example/actions/') for x in payload['components'][0]['components'])

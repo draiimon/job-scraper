@@ -23,7 +23,7 @@ async def worker():
         await asyncio.sleep(cfg.poll_interval_seconds)
 @asynccontextmanager
 async def lifespan(app):
-    repo.create_schema(); task=asyncio.create_task(worker()) if cfg.polling_enabled else None
+    repo.create_schema(); repo.expire_stale_jobs(); task=asyncio.create_task(worker()) if cfg.polling_enabled else None
     yield
     if task: task.cancel()
 app=FastAPI(title='Philippine Job Agent',lifespan=lifespan)
@@ -41,10 +41,11 @@ def health():
 @app.post('/run')
 async def run_once(): return await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)))
 @app.get('/jobs')
-def jobs(min_score:int=0,status:str|None=None):
+def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
     with repo.sessions() as s:
         q=select(Job).where(Job.score>=min_score)
         if status: q=q.where(Job.status==status)
+        elif not include_expired: q=q.where(Job.status!=JobStatus.EXPIRED.value)
         return s.scalars(q.order_by(Job.date_discovered.desc()).limit(200)).all()
 class StatusUpdate(BaseModel): status: JobStatus
 @app.patch('/jobs/{job_id}/status')

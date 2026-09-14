@@ -31,6 +31,19 @@ def identity_location(location: str) -> str:
 def is_ph_location(job: NormalizedJob) -> bool:
     place=clean(f"{job.location} {job.work_setup or ''}")
     return any(x in place for x in PH_LOCATIONS) and not ("remote" in place and "philippines" not in place and "ph" not in place)
+def freshness(job: NormalizedJob, now: datetime | None=None) -> tuple[int,str|None,bool]:
+    """Return score adjustment, human note, and whether an active listing may alert."""
+    if not job.date_posted: return -20,'Posted date unavailable',False
+    age=max(0,(now or datetime.now(timezone.utc)-job.date_posted).total_seconds()/86400)
+    if age<=3: return 15,'Posted within 3 days',True
+    if age<=7: return 8,'Posted within 7 days',True
+    if age<=14: return -5,'Posted 8–14 days ago',True
+    if age<=30: return -20,'Posted 15–30 days ago',True
+    return -100,'Stale posting (over 30 days)',False
+def is_active_listing(job: NormalizedJob) -> bool:
+    # Public ATS listings returned by their current board endpoints are active;
+    # malformed/non-HTTP links are never allowed through.
+    return (job.application_url or job.url).startswith(('https://','http://'))
 def evaluate(job: NormalizedJob, now: datetime | None=None) -> tuple[int,list[str],list[str],bool]:
     text=clean(f"{job.title} {job.description}"); title=clean(job.title); score=0; reasons=[]; warnings=[]
     primary_in_title=any(x in title for x in PRIMARY_ROLE_TERMS)
@@ -50,11 +63,10 @@ def evaluate(job: NormalizedJob, now: datetime | None=None) -> tuple[int,list[st
     if re.search(r"\b(?:5|6|7|8|9|10)\+?\s*years?", text): score-=70; warnings.append("Requires 5+ years")
     elif re.search(r"\b[34]\+?\s*years?", text): score-=40; warnings.append("Requires 3-4 years")
     if not relevant: score-=50; warnings.append("Role is outside technology disciplines")
-    current=now or datetime.now(timezone.utc)
-    if job.date_posted:
-        age=(current-job.date_posted).total_seconds()/86400
-        if age<=1: score+=15; reasons.append("Posted within 24 hours")
-        elif age<=3: score+=10; reasons.append("Posted within 3 days")
+    freshness_points,freshness_reason,fresh=freshness(job,now)
+    score+=freshness_points
+    if freshness_reason:
+        (reasons if freshness_points>=0 else warnings).append(freshness_reason)
     return max(0,min(100,score)), reasons, warnings, relevant and not senior_role and score >= 0
 
 def extract_skills(job: NormalizedJob) -> list[str]:
