@@ -6,6 +6,13 @@ import json
 import logging
 import os
 import re
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import quote_plus, urlparse
@@ -146,34 +153,45 @@ async def _is_authenticated(page) -> bool:
     return not _body_indicates_auth_required(body)
 
 
-async def _click_google_sign_in(page) -> bool:
-    import re as _re
-
-    patterns = (
-        _re.compile(r"continue\s+with\s+google", _re.IGNORECASE),
-        _re.compile(r"sign\s+in\s+with\s+google", _re.IGNORECASE),
+def _find_google_chrome() -> str:
+    candidates = [
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    discovered = shutil.which("chrome.exe") or shutil.which("chrome")
+    if discovered:
+        return discovered
+    raise RuntimeError(
+        "Google Chrome was not found. Install Google Chrome and run the connector again."
     )
-    for pattern in patterns:
-        for role in ("button", "link"):
-            try:
-                locator = page.get_by_role(role, name=pattern).first
-                if await locator.count():
-                    await locator.click()
-                    return True
-            except Exception:
-                continue
-    try:
-        locator = page.locator("button, a").filter(has_text=re.compile(r"google", re.IGNORECASE)).first
-        if await locator.count():
-            await locator.click()
-            return True
-    except Exception:
-        pass
-    return False
+
+
+def _free_local_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_cdp(port: int, timeout_seconds: int = 30) -> None:
+    endpoint = f"http://127.0.0.1:{port}/json/version"
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(endpoint, timeout=2):
+                return
+        except (OSError, urllib.error.URLError):
+            time.sleep(0.25)
+    raise RuntimeError("Google Chrome did not open its local CDP endpoint.")
 
 
 async def authenticate_jobstreet(cfg: Settings | None = None) -> Path:
-    """Open JobStreet and wait for the user to finish Google authentication."""
+    """Open installed Google Chrome and wait for manual authentication."""
 
     cfg = cfg or Settings()
     try:
@@ -185,45 +203,70 @@ async def authenticate_jobstreet(cfg: Settings | None = None) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(target.parent, 0o700)
     login_url = cfg.jobstreet_login_url or f"{cfg.jobstreet_base_url.rstrip('/')}/oauth/login"
+    chrome = None
+    profile_dir = tempfile.mkdtemp(prefix="jobstreet-chrome-")
+    port = _free_local_port()
+    try:
+        chrome = subprocess.Popen(
+            [
+                _find_google_chrome(),
+                f"--user-data-dir={profile_dir}",
+                "--remote-debugging-address=127.0.0.1",
+                f"--remote-debugging-port={port}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-sync",
+                login_url,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("Google Chrome is open with a temporary JobStreet profile.")
+        print("Complete Google/JobStreet login, 2FA, security prompts, and CAPTCHA manually.")
+        print("Waiting for JobStreet to confirm the authenticated session...")
+        _wait_for_cdp(port)
 
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=False)
-        context = await browser.new_context()
-        page = await context.new_page()
-        try:
-            await page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
-            clicked = await _click_google_sign_in(page)
-            if clicked:
-                print(
-                    "Google sign-in opened. Complete Google authentication, 2FA, "
-                    "security prompts, and consent manually in the browser."
-                )
-            else:
-                print(
-                    "JobStreet login opened. Choose Continue with Google and finish "
-                    "all authentication steps manually in the browser."
-                )
-            print("Waiting for JobStreet to confirm the authenticated session...")
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.connect_over_cdp(
+                f"http://127.0.0.1:{port}"
+            )
+            if not browser.contexts:
+                raise RuntimeError("The temporary Google Chrome context was not available.")
+            context = browser.contexts[0]
+            try:
+                deadline = asyncio.get_running_loop().time() + cfg.jobstreet_auth_timeout_seconds
+                authenticated = False
+                while asyncio.get_running_loop().time() < deadline:
+                    for page in list(context.pages):
+                        if await _is_authenticated(page):
+                            authenticated = True
+                            break
+                    if authenticated:
+                        break
+                    await asyncio.sleep(1.5)
+                if not authenticated:
+                    raise RuntimeError("JobStreet authentication was not completed before the timeout.")
 
-            deadline = asyncio.get_running_loop().time() + cfg.jobstreet_auth_timeout_seconds
-            authenticated = False
-            while asyncio.get_running_loop().time() < deadline:
-                if await _is_authenticated(page):
-                    authenticated = True
-                    break
-                await page.wait_for_timeout(1_500)
-            if not authenticated:
-                raise RuntimeError("JobStreet authentication was not completed before the timeout.")
-
-            await context.storage_state(path=str(target))
-            os.chmod(target, 0o600)
-            if not has_storage_state(cfg):
-                raise RuntimeError("Playwright did not save a valid JobStreet session state.")
-            print("Authenticated JobStreet session saved privately for discovery only.")
-            return target
-        finally:
-            await context.close()
-            await browser.close()
+                await context.storage_state(path=str(target))
+                os.chmod(target, 0o600)
+                if not has_storage_state(cfg):
+                    raise RuntimeError("Playwright did not save a valid JobStreet session state.")
+                print("Authenticated JobStreet session saved privately for discovery only.")
+                return target
+            finally:
+                await browser.close()
+    finally:
+        if chrome is not None:
+            try:
+                chrome.terminate()
+                chrome.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    chrome.kill()
+                except OSError:
+                    pass
+        shutil.rmtree(profile_dir, ignore_errors=True)
 
 
 def _parse_posted(value: str, now: datetime | None = None) -> datetime | None:

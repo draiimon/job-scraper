@@ -109,6 +109,7 @@ class _FakePage:
 class _FakeContext:
     def __init__(self, page):
         self.page = page
+        self.pages = [page]
 
     async def new_page(self):
         return self.page
@@ -137,7 +138,10 @@ class _FakePlaywrightContext:
     def __init__(self, page):
         self.page = page
         self.browser = _FakeBrowser(page)
-        self.chromium = SimpleNamespace(launch=self.launch)
+        self.chromium = SimpleNamespace(
+            launch=self.launch,
+            connect_over_cdp=self.connect_over_cdp,
+        )
 
     async def __aenter__(self):
         return self
@@ -149,14 +153,35 @@ class _FakePlaywrightContext:
         self.browser.launch_options = kwargs
         return self.browser
 
+    async def connect_over_cdp(self, endpoint):
+        self.browser.cdp_endpoint = endpoint
+        self.browser.contexts = [_FakeContext(self.page)]
+        return self.browser
+
 
 @pytest.mark.asyncio
-async def test_manual_auth_uses_headed_google_start_without_credential_automation(monkeypatch, tmp_path):
+async def test_manual_auth_uses_installed_chrome_cdp_without_credential_automation(monkeypatch, tmp_path):
     import playwright.async_api
+    import src.jobstreet as jobstreet_module
 
     page = _FakePage()
     playwright_context = _FakePlaywrightContext(page)
     monkeypatch.setattr(playwright.async_api, "async_playwright", lambda: playwright_context)
+    chrome_command = []
+    class _FakeProcess:
+        def terminate(self):
+            chrome_command.append("terminate")
+        def wait(self, timeout=None):
+            chrome_command.append(("wait", timeout))
+        def kill(self):
+            chrome_command.append("kill")
+    monkeypatch.setattr(jobstreet_module, "_find_google_chrome", lambda: "C:\\Chrome\\chrome.exe")
+    monkeypatch.setattr(jobstreet_module, "_wait_for_cdp", lambda port: None)
+    monkeypatch.setattr(
+        jobstreet_module.subprocess,
+        "Popen",
+        lambda command, **kwargs: (chrome_command.append(command) or _FakeProcess()),
+    )
     cfg = Settings(
         jobstreet_session_path=str(tmp_path / "private" / "jobstreet_session.json"),
         jobstreet_auth_timeout_seconds=1,
@@ -165,8 +190,12 @@ async def test_manual_auth_uses_headed_google_start_without_credential_automatio
     saved = await authenticate_jobstreet(cfg)
 
     assert saved.is_file()
-    assert playwright_context.browser.launch_options == {"headless": False}
-    assert any(action[0] == "click" and "google" in action[1] for action in page.actions)
+    assert playwright_context.browser.cdp_endpoint.startswith("http://127.0.0.1:")
+    command = chrome_command[0]
+    assert command[0] == "C:\\Chrome\\chrome.exe"
+    assert any(argument.startswith("--user-data-dir=") for argument in command)
+    assert any(argument.startswith("--remote-debugging-port=") for argument in command)
+    assert not any(action[0] == "click" for action in page.actions)
     assert not any(action[0] in {"fill", "press", "type"} for action in page.actions)
 
 

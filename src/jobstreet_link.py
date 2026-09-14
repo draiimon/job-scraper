@@ -1,10 +1,11 @@
 """Secure JobStreet session handoff.
 
-The production scanner runs Playwright directly on Render.  Authentication is
+The production scanner runs Playwright directly on Render. Authentication is
 the one human-in-the-loop step: Discord creates a short-lived signed link,
-which downloads a temporary Windows connector.  That connector opens local
-Playwright Chromium, waits for the user to finish authentication, and uploads
-only the resulting storage state.  The server encrypts it before persistence.
+which downloads a temporary Windows connector. That connector starts the
+user's installed Google Chrome with a disposable profile, attaches to it over
+CDP, waits for the user to finish authentication, and uploads only the
+JobStreet storage state. The server encrypts it before persistence.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ import secrets
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
@@ -166,6 +167,39 @@ def _validate_storage_state(storage_state: dict) -> None:
         raise ConnectionError("JobStreet did not provide valid browser session state.")
 
 
+def _jobstreet_host(cfg: Settings) -> str:
+    return (urlparse(cfg.jobstreet_base_url).hostname or "").lower().strip(".")
+
+
+def _is_jobstreet_host(hostname: str | None, expected: str) -> bool:
+    host = (hostname or "").lower().strip(".")
+    return bool(host and expected and (
+        host == expected
+        or host.endswith("." + expected)
+        or expected.endswith("." + host)
+    ))
+
+
+def _validate_jobstreet_storage_state(cfg: Settings, storage_state: dict) -> None:
+    """Reject uploads that do not contain storage scoped to JobStreet."""
+    _validate_storage_state(storage_state)
+    expected = _jobstreet_host(cfg)
+    cookies = storage_state["cookies"]
+    origins = storage_state.get("origins", [])
+    if any(not _is_jobstreet_host(cookie.get("domain"), expected) for cookie in cookies):
+        raise ConnectionError("JobStreet connector uploaded storage for another site.")
+    if any(
+        not _is_jobstreet_host(urlparse(origin.get("origin", "")).hostname, expected)
+        for origin in origins
+    ):
+        raise ConnectionError("JobStreet connector uploaded storage for another site.")
+    if not any(_is_jobstreet_host(cookie.get("domain"), expected) for cookie in cookies) and not any(
+        _is_jobstreet_host(urlparse(origin.get("origin", "")).hostname, expected)
+        for origin in origins
+    ):
+        raise ConnectionError("JobStreet connector did not provide JobStreet browser storage.")
+
+
 def save_verified_session(cfg: Settings, repo, discord_user_id: int | str, storage_state: dict) -> None:
     """Encrypt valid Playwright state before it ever reaches persistence."""
     _validate_storage_state(storage_state)
@@ -200,7 +234,7 @@ def complete_request(
     cfg: Settings, repo, token: str, storage_state: dict
 ) -> str:
     """Atomically consume a valid connector token and save its encrypted state."""
-    _validate_storage_state(storage_state)
+    _validate_jobstreet_storage_state(cfg, storage_state)
     ciphertext = _fernet(cfg).encrypt(
         json.dumps(storage_state, separators=(",", ":")).encode("utf-8")
     ).decode("ascii")
@@ -349,31 +383,138 @@ def has_managed_connection(repo, discord_user_id: int | str | None = None) -> bo
 
 
 def windows_connector_python() -> str:
-    """Python helper downloaded by the temporary Windows connector."""
+    """Python helper downloaded by the temporary Windows Chrome connector.
+
+    This code is intentionally self-contained because it is downloaded to the
+    user's Windows machine. It must never call Playwright's browser launcher:
+    the interactive login has to happen in the user's installed Google Chrome
+    so Google's browser-integrity checks see a normal Chrome process.
+    """
     return r'''from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
+from pathlib import Path
+import shutil
+import socket
+import subprocess
 import sys
+import tempfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
-def looks_like_login(url):
-    lowered = (url or "").lower()
-    return ("accounts.google." in lowered or
-            any(marker in lowered for marker in ("/login", "/signin", "/sign-in", "auth/")))
+def find_google_chrome():
+    candidates = [
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    ]
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    discovered = shutil.which("chrome.exe") or shutil.which("chrome")
+    if discovered:
+        return discovered
+    raise FileNotFoundError(
+        "Google Chrome was not found. Install Google Chrome, then run this connector again."
+    )
 
-async def authenticated(page):
-    if looks_like_login(page.url):
+def free_local_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+def host_matches(hostname, expected):
+    host = (hostname or "").lower().strip(".")
+    expected = (expected or "").lower().strip(".")
+    return bool(host and expected and (
+        host == expected or host.endswith("." + expected) or expected.endswith("." + host)
+    ))
+
+def jobstreet_host(url):
+    return (urllib.parse.urlparse(url).hostname or "").lower().strip(".")
+
+def is_jobstreet_url(url, expected_host):
+    parsed = urllib.parse.urlparse(url or "")
+    return parsed.scheme in ("http", "https") and host_matches(parsed.hostname, expected_host)
+
+async def authenticated(page, expected_host):
+    if not is_jobstreet_url(page.url, expected_host):
+        return False
+    parsed = urllib.parse.urlparse(page.url)
+    lowered_path = parsed.path.lower()
+    if any(marker in lowered_path for marker in ("/login", "/signin", "/sign-in", "/oauth")):
         return False
     try:
         body = await page.locator("body").inner_text(timeout=5000)
     except Exception:
         return False
     lowered = body.lower()
-    if any(marker in lowered for marker in ("sign out", "log out", "my profile", "my account")):
+    if any(marker in lowered for marker in ("sign out", "log out", "my profile", "my account", "account settings")):
         return True
-    return not any(marker in lowered for marker in ("continue with google", "sign in", "log in"))
+    return not any(marker in lowered for marker in (
+        "continue with google", "sign in", "log in", "create account"
+    ))
+
+def cookie_matches_jobstreet(cookie, expected_host):
+    return host_matches(cookie.get("domain"), expected_host)
+
+def origin_matches_jobstreet(origin, expected_host):
+    try:
+        return host_matches(urllib.parse.urlparse(origin.get("origin", "")).hostname, expected_host)
+    except Exception:
+        return False
+
+async def jobstreet_storage_state(context, expected_host):
+    state = await context.storage_state()
+    state["cookies"] = [
+        cookie for cookie in state.get("cookies", [])
+        if cookie_matches_jobstreet(cookie, expected_host)
+    ]
+    state["origins"] = [
+        origin for origin in state.get("origins", [])
+        if origin_matches_jobstreet(origin, expected_host)
+    ]
+    if not state["cookies"] and not state["origins"]:
+        raise RuntimeError("Authenticated JobStreet page had no JobStreet browser storage to upload.")
+    return state
+
+def wait_for_cdp(port, timeout_seconds=30):
+    endpoint = "http://127.0.0.1:{}/json/version".format(port)
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(endpoint, timeout=2) as response:
+                json.loads(response.read().decode("utf-8"))
+            return
+        except (OSError, ValueError, urllib.error.URLError):
+            time.sleep(0.25)
+    raise TimeoutError("Google Chrome did not open its local CDP endpoint.")
+
+def upload_state(args, state):
+    body = json.dumps(state, separators=(",", ":")).encode("utf-8")
+    request = urllib.request.Request(
+        args.upload_url,
+        data=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-JobStreet-Connection-Token": args.token,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=45) as response:
+            result = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")
+        raise RuntimeError("Session upload was rejected: " + detail[:240]) from exc
+    if result.get("status") != "READY":
+        raise RuntimeError("Session upload did not return READY.")
 
 async def run(args):
     try:
@@ -381,49 +522,69 @@ async def run(args):
     except ImportError:
         print("Playwright is not installed. Run: py -m pip install playwright", file=sys.stderr)
         raise
-    async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=False)
-        context = await browser.new_context()
-        page = await context.new_page()
-        try:
-            await page.goto(args.login_url, wait_until="domcontentloaded", timeout=60000)
-            print("Chromium is open. Complete JobStreet/Google login, 2FA, and CAPTCHA manually.")
-            print("Waiting for JobStreet authentication...")
-            deadline = asyncio.get_running_loop().time() + args.timeout_seconds
-            while asyncio.get_running_loop().time() < deadline:
-                if await authenticated(page):
-                    state = await context.storage_state()
-                    body = json.dumps(state, separators=(",", ":")).encode("utf-8")
-                    request = urllib.request.Request(
-                        args.upload_url,
-                        data=body,
-                        headers={
-                            "Content-Type": "application/json",
-                            "X-JobStreet-Connection-Token": args.token,
-                        },
-                        method="POST",
-                    )
-                    try:
-                        with urllib.request.urlopen(request, timeout=45) as response:
-                            result = json.loads(response.read().decode("utf-8"))
-                    except urllib.error.HTTPError as exc:
-                        detail = exc.read().decode("utf-8", "replace")
-                        raise RuntimeError("Session upload was rejected: " + detail[:240]) from exc
-                    if result.get("status") != "READY":
-                        raise RuntimeError("Session upload did not return READY.")
-                    print("JobStreet is READY. Session uploaded successfully.")
-                    return
-                await page.wait_for_timeout(1500)
-            raise TimeoutError("Authentication was not completed before the safety timeout.")
-        finally:
-            await context.close()
-            await browser.close()
+    chrome = None
+    profile_dir = tempfile.mkdtemp(prefix="jobstreet-chrome-")
+    port = free_local_port()
+    try:
+        chrome_path = find_google_chrome()
+        chrome = subprocess.Popen(
+            [
+                chrome_path,
+                "--user-data-dir=" + profile_dir,
+                "--remote-debugging-address=127.0.0.1",
+                "--remote-debugging-port=" + str(port),
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-sync",
+                args.login_url,
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        print("Google Chrome is open with a temporary JobStreet profile.")
+        print("Complete Google/JobStreet login, 2FA, and CAPTCHA manually.")
+        print("Waiting for JobStreet authentication...")
+        wait_for_cdp(port)
+        async with async_playwright() as playwright:
+            browser = await playwright.chromium.connect_over_cdp(
+                "http://127.0.0.1:{}".format(port)
+            )
+            if not browser.contexts:
+                raise RuntimeError("The temporary Google Chrome context was not available.")
+            context = browser.contexts[0]
+            expected_host = jobstreet_host(args.jobstreet_base_url)
+            try:
+                deadline = asyncio.get_running_loop().time() + args.timeout_seconds
+                while asyncio.get_running_loop().time() < deadline:
+                    for page in list(context.pages):
+                        if await authenticated(page, expected_host):
+                            state = await jobstreet_storage_state(context, expected_host)
+                            upload_state(args, state)
+                            print("JobStreet is READY. Session uploaded successfully.")
+                            return
+                    await asyncio.sleep(1.5)
+                raise TimeoutError("Authentication was not completed before the safety timeout.")
+            finally:
+                await browser.close()
+    finally:
+        if chrome is not None:
+            try:
+                chrome.terminate()
+                chrome.wait(timeout=10)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    chrome.kill()
+                except OSError:
+                    pass
+        shutil.rmtree(profile_dir, ignore_errors=True)
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--token", required=True)
     parser.add_argument("--upload-url", required=True)
     parser.add_argument("--login-url", required=True)
+    parser.add_argument("--jobstreet-base-url", required=True)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     asyncio.run(run(parser.parse_args()))
 
@@ -445,16 +606,17 @@ $token = "{token}"
 $helperUrl = "{helper_url}"
 $uploadUrl = "{upload_url}"
 $loginUrl = "{login_url}"
+$jobstreetBaseUrl = "{cfg.jobstreet_base_url}"
 $temporaryHelper = Join-Path $env:TEMP ("jobstreet-connector-" + [guid]::NewGuid().ToString() + ".py")
 try {{
   Invoke-WebRequest -UseBasicParsing -Uri $helperUrl -OutFile $temporaryHelper
   $python = Get-Command py -ErrorAction SilentlyContinue
   if ($python) {{
-    & $python.Source -3 $temporaryHelper --token $token --upload-url $uploadUrl --login-url $loginUrl
+    & $python.Source -3 $temporaryHelper --token $token --upload-url $uploadUrl --login-url $loginUrl --jobstreet-base-url $jobstreetBaseUrl
   }} else {{
     $python = Get-Command python -ErrorAction SilentlyContinue
     if (-not $python) {{ throw "Python 3 was not found. Install Python 3 and Playwright, then run this connector again." }}
-    & $python.Source $temporaryHelper --token $token --upload-url $uploadUrl --login-url $loginUrl
+    & $python.Source $temporaryHelper --token $token --upload-url $uploadUrl --login-url $loginUrl --jobstreet-base-url $jobstreetBaseUrl
   }}
   if ($LASTEXITCODE -ne 0) {{ throw "The local JobStreet connector exited with code $LASTEXITCODE." }}
 }} finally {{

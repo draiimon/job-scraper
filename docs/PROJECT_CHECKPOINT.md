@@ -44,10 +44,11 @@ LinkedIn is optional and is used only when Bright Data is enabled, authenticated
 
 JobStreet is optional and is linked from Discord with `v!jobstreet`. The
 `CONNECT JOBSTREET` action creates a signed, short-lived, one-time private URL.
-The setup page downloads a temporary Windows connector. Running it opens local
-Playwright Chromium and keeps it open while the user completes Google/JobStreet
-sign-in, 2FA, consent, or CAPTCHA manually. The connector uploads only the
-resulting Playwright storage state; the server encrypts it before storing it in
+The setup page downloads a temporary Windows connector. Running it opens
+installed Google Chrome with a separate temporary profile and keeps it open
+while the user completes Google/JobStreet sign-in, 2FA, consent, or CAPTCHA
+manually. Playwright attaches to that Chrome process over CDP and uploads only
+the JobStreet storage state; the server encrypts it before storing it in
 `source_connections`. `CHECK CONNECTION`, `REAUTHENTICATE`, and `DISCONNECT`
 are available from the same control panel. Automatic scans and `v!search`
 include JobStreet only while the stored connection is `READY`; public ATS

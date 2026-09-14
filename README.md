@@ -112,7 +112,7 @@ The preferred production flow is Discord-first:
 
 ```text
 v!jobstreet → CONNECT JOBSTREET → private short-lived setup link
-→ Browserless interactive browser → WAITING FOR USER LOGIN
+→ installed Google Chrome with a temporary profile → WAITING FOR USER LOGIN
 → manual Google/JobStreet sign-in
 → session verification → encrypted database session → READY
 ```
@@ -124,13 +124,9 @@ automates a challenge, or stores plaintext cookies. `CHECK CONNECTION`,
 control panel. Automatic scans and `v!search` include JobStreet only while the
 connection is `READY`; public ATS sources continue if JobStreet is unavailable.
 
-Browserless and JobStreet runtime configuration is initialized in the database
-table `app_settings`. The safe Browserless Cloud endpoint is created on first
-startup and can be overridden there; `jobstreet_enabled`, the JobStreet base
-URL, search terms, limits, and timeout values are also non-secret database
-settings. `BROWSERLESS_API_TOKEN` is the current deployment credential; a
-Vault value is only a fallback when the deployment secret is absent, so a stale
-Vault value cannot override a rotated credential. The token,
+JobStreet runtime configuration is initialized in the database table
+`app_settings`; `jobstreet_enabled`, the JobStreet base URL, search terms,
+limits, and timeout values are non-secret database settings. The token,
 Google credentials, cookies, storage state, and encryption material are never
 written to normal configuration rows or logs.
 

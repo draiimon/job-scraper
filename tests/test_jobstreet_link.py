@@ -65,20 +65,30 @@ def test_connector_upload_consumes_token_and_sets_ready(tmp_path):
     repo = Repository(cfg.database_url)
     repo.create_schema()
     token = create_request(repo, 456, app_secret_key=cfg.app_secret_key)
-    state = {"cookies": [{"name": "session", "value": "uploaded"}], "origins": []}
+    state = {
+        "cookies": [{"name": "session", "value": "uploaded", "domain": ".jobstreet.com"}],
+        "origins": [],
+    }
     assert complete_request(cfg, repo, token, state) == "READY"
     assert connection_status(cfg, repo, 456) == "READY"
     with pytest.raises(Exception, match="expired or already used"):
         complete_request(cfg, repo, token, state)
 
 
-def test_windows_connector_is_local_playwright_and_has_no_browserless_dependency(tmp_path):
+def test_windows_connector_uses_installed_chrome_over_cdp(tmp_path):
     cfg = configured(tmp_path)
     script = windows_connector_ps1(cfg.public_base_url, "signed-token", cfg)
     helper = windows_connector_python()
     assert "Browserless" not in script
     assert "Browserless" not in helper
-    assert "chromium.launch(headless=False)" in helper
+    assert "chromium.launch(" not in helper
+    assert "connect_over_cdp" in helper
+    assert "find_google_chrome" in helper
+    assert "--user-data-dir=" in helper
+    assert "--remote-debugging-port=" in helper
+    assert "jobstreet_storage_state" in helper
+    assert "Google Chrome" in helper
     assert "X-JobStreet-Connection-Token" in helper
     assert "connector.py" in script
+    assert "--jobstreet-base-url" in script
     assert "signed-token" in script

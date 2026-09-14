@@ -497,7 +497,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         embed=styled_embed(
             '𝐂𝐎𝐍𝐍𝐄𝐂𝐓 𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓',
             'Open the private setup link on the Windows PC where you want to authenticate. '
-            'Download and run the connector; it opens local Playwright Chromium automatically.',
+            'Download and run the connector; it opens installed Google Chrome with a temporary profile automatically.',
         )
         embed.add_field(name='𝐒𝐄𝐓𝐔𝐏 𝐋𝐈𝐍𝐊',value=f'COPY THIS URL INTO YOUR BROWSER:\n{url}',inline=False)
         embed.add_field(name='𝐄𝐗𝐏𝐈𝐑𝐘',value='This signed one-time link expires in 10 minutes.',inline=False)
