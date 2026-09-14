@@ -1,0 +1,68 @@
+Windows PowerShell
+Copyright (C) Microsoft Corporation. All rights reserved.
+
+Install the latest PowerShell for new features and improvements! https://aka.ms/PSWindows
+
+PS C:\Users\Aloof> $ErrorActionPreference = "Stop"
+PS C:\Users\Aloof> $token = "eyJ1IjoiNzA1NzcwODM3Mzk5MzA2MzMyIiwibiI6ImIwNWUyZWI3MTUxM2IxMGM3YTQ2MTcwZjhlY2Q2Yzg2NTRjZTBiODE0NDI3OTZmYiIsImUiOjE3ODk0MTAzNTcsInIiOiJGR2ZfQUJQYVJuTzJrTU13bmoycnp6d2QifXhzqi9qtlngSqspH3oEMNOozTL2E9B4IMx05aYFfH1p"
+PS C:\Users\Aloof> $helperUrl = "https://job-scraper-uk76.onrender.com/connect/jobstreet/eyJ1IjoiNzA1NzcwODM3Mzk5MzA2MzMyIiwibiI6ImIwNWUyZWI3MTUxM2IxMGM3YTQ2MTcwZjhlY2Q2Yzg2NTRjZTBiODE0NDI3OTZmYiIsImUiOjE3ODk0MTAzNTcsInIiOiJGR2ZfQUJQYVJuTzJrTU13bmoycnp6d2QifXhzqi9qtlngSqspH3oEMNOozTL2E9B4IMx05aYFfH1p/connector.py"
+PS C:\Users\Aloof> $uploadUrl = "https://job-scraper-uk76.onrender.com/connect/jobstreet/eyJ1IjoiNzA1NzcwODM3Mzk5MzA2MzMyIiwibiI6ImIwNWUyZWI3MTUxM2IxMGM3YTQ2MTcwZjhlY2Q2Yzg2NTRjZTBiODE0NDI3OTZmYiIsImUiOjE3ODk0MTAzNTcsInIiOiJGR2ZfQUJQYVJuTzJrTU13bmoycnp6d2QifXhzqi9qtlngSqspH3oEMNOozTL2E9B4IMx05aYFfH1p/session"
+PS C:\Users\Aloof> $loginUrl = "https://ph.jobstreet.com/oauth/login"
+PS C:\Users\Aloof> $temporaryHelper = Join-Path $env:TEMP ("jobstreet-connector-" + [guid]::NewGuid().ToString() + ".py")
+PS C:\Users\Aloof> try {
+>>   Invoke-WebRequest -UseBasicParsing -Uri $helperUrl -OutFile $temporaryHelper
+>>   $python = Get-Command py -ErrorAction SilentlyContinue
+>>   if ($python) {
+>>     & $python.Source -3 $temporaryHelper --token $token --upload-url $uploadUrl --login-url $loginUrl
+>>   } else {
+>>     $python = Get-Command python -ErrorAction SilentlyContinue
+>>     if (-not $python) { throw "Python 3 was not found. Install Python 3 and Playwright, then run this connector again." }
+>>     & $python.Source $temporaryHelper --token $token --upload-url $uploadUrl --login-url $loginUrl
+>>   }
+>>   if ($LASTEXITCODE -ne 0) { throw "The local JobStreet connector exited with code $LASTEXITCODE." }
+>> } finally {
+>>   Remove-Item -Force -ErrorAction SilentlyContinue $temporaryHelper
+>> }
+Traceback (most recent call last):
+  File "C:\Users\Aloof\AppData\Local\Temp\jobstreet-connector-42748b5f-1888-4578-96fd-1bf1b3ffde56.py", line 80, in <module>
+    main()
+  File "C:\Users\Aloof\AppData\Local\Temp\jobstreet-connector-42748b5f-1888-4578-96fd-1bf1b3ffde56.py", line 76, in main
+    asyncio.run(run(parser.parse_args()))
+  File "C:\Users\Aloof\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\Aloof\AppData\Local\Programs\Python\Python312\Lib\asyncio\runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Aloof\AppData\Local\Programs\Python\Python312\Lib\asyncio\base_events.py", line 664, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\Aloof\AppData\Local\Temp\jobstreet-connector-42748b5f-1888-4578-96fd-1bf1b3ffde56.py", line 33, in run
+    browser = await playwright.chromium.launch(headless=False)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Aloof\AppData\Local\Programs\Python\Python312\Lib\site-packages\playwright\async_api\_generated.py", line 16731, in launch
+    await self._impl_obj.launch(
+  File "C:\Users\Aloof\AppData\Local\Programs\Python\Python312\Lib\site-packages\playwright\_impl\_browser_type.py", line 97, in launch
+    await self._channel.send(
+  File "C:\Users\Aloof\AppData\Local\Programs\Python\Python312\Lib\site-packages\playwright\_impl\_connection.py", line 76, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\Aloof\AppData\Local\Programs\Python\Python312\Lib\site-packages\playwright\_impl\_connection.py", line 632, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.Error: BrowserType.launch: Executable doesn't exist at C:\Users\Aloof\AppData\Local\ms-playwright\chromium-1234\chrome-win64\chrome.exe
+╔════════════════════════════════════════════════════════════╗
+║ Looks like Playwright was just installed or updated.       ║
+║ Please run the following command to download new browsers: ║
+║                                                            ║
+║     playwright install                                     ║
+║                                                            ║
+║ <3 Playwright Team                                         ║
+╚════════════════════════════════════════════════════════════╝
+The local JobStreet connector exited with code 1.
+At line:11 char:30
++ ... DE -ne 0) { throw "The local JobStreet connector exited with code $LA ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : OperationStopped: (The local JobSt...ed with code 1.:String) [], RuntimeException
+    + FullyQualifiedErrorId : The local JobStreet connector exited with code 1.
+
+PS C:\Users\Aloof>
