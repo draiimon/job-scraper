@@ -102,6 +102,18 @@ The scanner keeps recent active Philippine or Remote PH technology roles, reject
 
 Bright Data is disabled unless both `BRIGHTDATA_ENABLED=true` and `BRIGHTDATA_API_TOKEN` are configured. LinkedIn manual searches are user-initiated and capped by `BRIGHTDATA_LINKEDIN_MONTHLY_REQUEST_LIMIT`; JobStreet page loads have their own monthly safety cap.
 
+### JobStreet Google session
+
+JobStreet discovery can use a private Playwright browser session authenticated with **Continue with Google**:
+
+```bash
+python -m src.jobstreet_auth
+```
+
+The command opens a visible browser, navigates to JobStreet, starts Google sign-in when the button is available, and waits for the user to complete Google authentication, 2FA, security prompts, consent, or CAPTCHA manually. It never receives or stores a Google password, automates 2FA, bypasses CAPTCHA, or prints cookies/tokens. The resulting Playwright storage state is saved at `data/private/jobstreet_session.json`, which is gitignored.
+
+The saved session is reused for JobStreet listing discovery only. Listings enter the normal freshness, technical-role, seniority, scoring, deduplication, and Discord pipeline. JobStreet applications are never submitted automatically. If the session expires, the source reports `AUTH REQUIRED`; run the setup command and authenticate with Google again.
+
 AI is disabled by default. When enabled for application review, Gemini only revises a deterministic draft, validates the response for common fabricated claims, and falls back to the deterministic letter on any failure or rate limit. It is not part of normal monitoring.
 
 `data/master-profile.json` is private, gitignored, and remains an optional fallback for tailoring when no database resume is present. The database resume is the primary application context. Cover letters use deterministic truthful drafting, optional Gemini revision, factual validation, and a deterministic fallback when Gemini fails. Do not store contact details, credentials, OAuth material, or provider keys in source control.
@@ -121,6 +133,7 @@ Copy `.env.example` and provide only the integrations you intend to use. Importa
 - `POLLING_ENABLED` and `POLL_INTERVAL_SECONDS`
 - `PROFILE_PATH` for the optional JSON fallback profile; the active PDF resume is managed through `/resume` or `v!resume` (`RESUME_PATH` remains available for legacy Discord viewing)
 - Bright Data and Gemini variables when those optional features are enabled
+- JobStreet Google-session variables when browser discovery is enabled; no Google password belongs in `.env`
 
 Never print or commit secrets. Run the full test suite before deploying:
 
@@ -132,7 +145,7 @@ python -m pytest -q
 
 Values belong in the deployment secret/environment manager, not in Git. Supported names are:
 
-`DATABASE_URL`, `DISCORD_WEBHOOK_URL`, `DISCORD_BOT_TOKEN`, `DISCORD_BOT_GUILD_ID`, `DISCORD_CONTROL_CHANNEL_ID`, `DISCORD_MOTIVATION`, `DISCORD_MOTIVATIONS_JSON`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `AUTO_SEND_EMAIL_APPLICATIONS`, `MIN_NOTIFY_SCORE`, `MIN_AUTO_APPLICATION_SCORE`, `MAX_NOTIFICATIONS_PER_CYCLE`, `MANUAL_SCAN_COOLDOWN_SECONDS`, `SCAN_SOURCE_CONCURRENCY`, `SCAN_SOURCE_TIMEOUT_SECONDS`, `POLLING_ENABLED`, `APP_TIMEZONE`, `APP_SECRET_KEY`, `PUBLIC_BASE_URL`, `COVER_LETTER_MODE`, `SOURCE_TARGETS_JSON`, `SOURCE_CONFIG_PATH`, `POLL_INTERVAL_SECONDS`, `LOG_LEVEL`, `HOST`, `PORT`, `PROFILE_PATH`, `RESUME_PATH`, `APPLICATION_DRY_RUN`, `AI_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_DAILY_REQUEST_LIMIT`, `AI_MIN_JOB_SCORE`, `GEMINI_API_KEY`, `GEMINI_API_KEYS`, `GEMINI_API_KEY2`, `GEMINI_API_KEY3`, `GEMINI_API_KEY4`, `GEMINI_API_KEY5`, `GEMINI_API_KEY6`, `GEMINI_API_KEY7`, `GEMINI_API_KEY8`, `GEMINI_API_KEY9`, `GEMINI_KEY_PROJECTS_JSON`, `GEMINI_MODEL`, `GEMINI_MAX_RETRIES`, `GEMINI_CONCURRENCY_LIMIT`, `BRIGHTDATA_ENABLED`, `BRIGHTDATA_API_TOKEN`, `BRIGHTDATA_LINKEDIN_JOBS_DATASET_ID`, `BRIGHTDATA_JOBSTREET_DATASET_ID`, `BRIGHTDATA_LINKEDIN_JOBS_INPUTS_JSON`, `BRIGHTDATA_JOBSTREET_INPUTS_JSON`, `BRIGHTDATA_JOBSTREET_MONTHLY_PAGE_LIMIT`, and `BRIGHTDATA_LINKEDIN_MONTHLY_REQUEST_LIMIT`.
+`DATABASE_URL`, `DISCORD_WEBHOOK_URL`, `DISCORD_BOT_TOKEN`, `DISCORD_BOT_GUILD_ID`, `DISCORD_CONTROL_CHANNEL_ID`, `DISCORD_MOTIVATION`, `DISCORD_MOTIVATIONS_JSON`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`, `AUTO_SEND_EMAIL_APPLICATIONS`, `MIN_NOTIFY_SCORE`, `MIN_AUTO_APPLICATION_SCORE`, `MAX_NOTIFICATIONS_PER_CYCLE`, `MANUAL_SCAN_COOLDOWN_SECONDS`, `SCAN_SOURCE_CONCURRENCY`, `SCAN_SOURCE_TIMEOUT_SECONDS`, `POLLING_ENABLED`, `APP_TIMEZONE`, `APP_SECRET_KEY`, `PUBLIC_BASE_URL`, `COVER_LETTER_MODE`, `SOURCE_TARGETS_JSON`, `SOURCE_CONFIG_PATH`, `POLL_INTERVAL_SECONDS`, `LOG_LEVEL`, `HOST`, `PORT`, `PROFILE_PATH`, `RESUME_PATH`, `APPLICATION_DRY_RUN`, `AI_ENABLED`, `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_DAILY_REQUEST_LIMIT`, `AI_MIN_JOB_SCORE`, `GEMINI_API_KEY`, `GEMINI_API_KEYS`, `GEMINI_API_KEY2`, `GEMINI_API_KEY3`, `GEMINI_API_KEY4`, `GEMINI_API_KEY5`, `GEMINI_API_KEY6`, `GEMINI_API_KEY7`, `GEMINI_API_KEY8`, `GEMINI_API_KEY9`, `GEMINI_KEY_PROJECTS_JSON`, `GEMINI_MODEL`, `GEMINI_MAX_RETRIES`, `GEMINI_CONCURRENCY_LIMIT`, `BRIGHTDATA_ENABLED`, `BRIGHTDATA_API_TOKEN`, `BRIGHTDATA_LINKEDIN_JOBS_DATASET_ID`, `BRIGHTDATA_JOBSTREET_DATASET_ID`, `BRIGHTDATA_LINKEDIN_JOBS_INPUTS_JSON`, `BRIGHTDATA_JOBSTREET_INPUTS_JSON`, `BRIGHTDATA_JOBSTREET_MONTHLY_PAGE_LIMIT`, `BRIGHTDATA_LINKEDIN_MONTHLY_REQUEST_LIMIT`, `JOBSTREET_SESSION_PATH`, `JOBSTREET_BASE_URL`, `JOBSTREET_LOGIN_URL`, `JOBSTREET_LOCATION`, `JOBSTREET_SEARCH_TERMS_JSON`, `JOBSTREET_MAX_RESULTS`, and `JOBSTREET_AUTH_TIMEOUT_SECONDS`.
 
 ## Troubleshooting
 
@@ -142,6 +155,7 @@ Values belong in the deployment secret/environment manager, not in Git. Supporte
 - A full scan runs in the background and offloads synchronous persistence work so it does not block Discord heartbeats.
 - If a Discord task exits unexpectedly, the application logs `discord_bot_task_failed` while FastAPI and the scheduler remain alive.
 - `DISCORD_WEBHOOK_URL` is fallback delivery only. It must not create a competing control panel when the bot is healthy.
+- If JobStreet shows `AUTH REQUIRED`, run `python -m src.jobstreet_auth` and complete Google sign-in manually. Never add Google credentials to `.env`.
 
 ## Replit and Render
 

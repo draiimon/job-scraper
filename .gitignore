@@ -9,6 +9,7 @@
 *token*.json
 *credentials*.json
 data/private/
+data/private/jobstreet_session.json
 data/applications/
 data/master-profile.json
 *.pdf

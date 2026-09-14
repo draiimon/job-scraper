@@ -17,7 +17,7 @@ After Hours Job Hunter monitors recent Philippine and Remote PH technology roles
 - Discord webhook as emergency notification fallback
 - SQLAlchemy persistence using PostgreSQL/Supabase in deployment or SQLite locally
 - Greenhouse, Lever, and Ashby ATS adapters
-- Optional Bright Data LinkedIn and JobStreet adapters
+- Optional Bright Data LinkedIn adapter and manual Google-authenticated JobStreet browser discovery
 - Optional Gemini cover-letter polishing with deterministic fallback
 - Docker and Render-compatible process configuration
 
@@ -53,7 +53,7 @@ Slow button and modal callbacks acknowledge immediately and move synchronous dat
 
 If `SOURCE_TARGETS_JSON` is valid and non-empty, it overrides `config/job_sources.json`. Empty values fall back to the checked-in JSON file. The checked-in fallback currently contains six public boards; the active verified deployment loaded 26 targets through its valid override. Invalid or empty source configuration fails explicitly instead of silently producing zero sources.
 
-LinkedIn is disabled unless Bright Data is enabled, authenticated, supplied with valid inputs, and configured with the LinkedIn dataset. JobStreet is truthful and remains disabled unless a real JobStreet dataset ID and inputs are configured.
+LinkedIn is disabled unless Bright Data is enabled, authenticated, supplied with valid inputs, and configured with the LinkedIn dataset. JobStreet discovery uses a manually authenticated Playwright Google session at `data/private/jobstreet_session.json`; it reports `AUTH REQUIRED` when no valid saved session is available. It never stores Google passwords, automates 2FA, bypasses CAPTCHA, or submits applications.
 
 ## Filtering rules
 
@@ -81,6 +81,8 @@ Use `.env.example` as the name reference. Store values only in the deployment en
 - `src/jobs.py` — normalization, freshness, location, scoring, and filtering
 - `src/applications.py` — deterministic cover letters, Gemini revision, validation, and application packages
 - `src/brightdata.py` — optional Bright Data LinkedIn/JobStreet adapters
+- `src/jobstreet.py` — manual Google-session setup and authenticated JobStreet discovery source
+- `src/jobstreet_auth.py` — `python -m src.jobstreet_auth` interactive setup command
 - `config/job_sources.json` — checked-in public ATS fallback targets
 - `tests/test_pipeline.py` — regression and behavior tests
 - `Dockerfile` and `render.yaml` — production-compatible process configuration
@@ -96,7 +98,7 @@ Use `.env.example` as the name reference. Store values only in the deployment en
 - Source health after full scan: 26 working
 - Jobs checked in the verified full scan: 5,103
 - LinkedIn: disabled in the current runtime
-- JobStreet: disabled because no real dataset ID is configured
+- JobStreet: Google-session discovery is ready only after manual authentication; otherwise `AUTH REQUIRED`
 - Browser job UI: disabled for normal user flow; Discord is primary
 - Render compatibility: preserved through `Dockerfile`, `render.yaml`, `0.0.0.0`, and runtime `PORT`
 

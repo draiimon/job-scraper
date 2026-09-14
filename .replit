@@ -2,7 +2,7 @@ modules = ["python-3.12"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["freetype", "gumbo", "harfbuzz", "jbig2dec", "libjpeg_turbo", "mupdf", "openjpeg", "postgresql", "swig", "xcbuild"]
+packages = ["freetype", "gumbo", "harfbuzz", "jbig2dec", "libjpeg_turbo", "mupdf", "openjpeg", "playwright-driver", "postgresql", "swig", "xcbuild", "nss", "atk", "at-spi2-atk", "cairo", "cups", "dbus", "expat", "gdk-pixbuf", "glib", "gtk3", "libdrm", "libxkbcommon", "mesa", "pango", "wayland", "xorg.libX11", "xorg.libXcomposite", "xorg.libXdamage", "xorg.libXext", "xorg.libXfixes", "xorg.libXrandr", "xorg.libxcb", "alsa-lib", "libgbm"]
 
 [agent]
 expertMode = true

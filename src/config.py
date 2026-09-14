@@ -60,6 +60,13 @@ class Settings(BaseSettings):
     # the advertised free allowance unless the operator explicitly changes it.
     brightdata_jobstreet_monthly_page_limit: int = 250
     brightdata_linkedin_monthly_request_limit: int = 100
+    jobstreet_session_path: str = "data/private/jobstreet_session.json"
+    jobstreet_base_url: str = "https://ph.jobstreet.com"
+    jobstreet_login_url: str = ""
+    jobstreet_location: str = "Philippines"
+    jobstreet_search_terms_json: str = '["DevOps", "Cloud", "IT Support"]'
+    jobstreet_max_results: int = 50
+    jobstreet_auth_timeout_seconds: int = 600
 
     @property
     def source_targets(self) -> list[dict]:
@@ -118,6 +125,15 @@ class Settings(BaseSettings):
             data=json.loads(raw)
             return data if isinstance(data,list) and all(isinstance(x,dict) for x in data) else []
         except json.JSONDecodeError: return []
+    @property
+    def jobstreet_search_terms(self) -> list[str]:
+        try:
+            values=json.loads(self.jobstreet_search_terms_json)
+            if isinstance(values,list):
+                return [str(value).strip() for value in values if str(value).strip()]
+        except json.JSONDecodeError:
+            pass
+        return ["DevOps", "Cloud", "IT Support"]
 
 @lru_cache
 def settings() -> Settings: return Settings()
