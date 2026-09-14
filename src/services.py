@@ -24,7 +24,20 @@ class Repository:
         if url.startswith('sqlite:///') and not url.startswith('sqlite:////'):
             Path(url.removeprefix('sqlite:///')).parent.mkdir(parents=True, exist_ok=True)
         connect_args={'check_same_thread':False} if url.startswith('sqlite') else {}
-        self.engine=create_engine(url,connect_args=connect_args); self.sessions=sessionmaker(self.engine,expire_on_commit=False)
+        engine_options={}
+        if url.startswith('postgresql+'):
+            # Keep one process well below hosted PostgreSQL session caps. Scan
+            # work can fan out, but callers should queue for a small pool
+            # instead of creating a connection per source thread.
+            engine_options.update(
+                pool_size=3,
+                max_overflow=1,
+                pool_timeout=60,
+                pool_recycle=900,
+                pool_pre_ping=True,
+                pool_use_lifo=True,
+            )
+        self.engine=create_engine(url,connect_args=connect_args,**engine_options); self.sessions=sessionmaker(self.engine,expire_on_commit=False)
     def create_schema(self): Base.metadata.create_all(self.engine)
     def initialize_runtime_config(self, cfg: Settings) -> dict[str, str]:
         """Create/load safe runtime settings and hydrate the process config.

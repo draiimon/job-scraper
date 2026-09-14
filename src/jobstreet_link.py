@@ -19,6 +19,7 @@ from urllib.parse import quote_plus
 
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy import select
+from sqlalchemy.exc import SQLAlchemyError
 
 from .config import Settings
 from .models import SourceConnection, SourceConnectionRequest
@@ -213,10 +214,26 @@ def _request_status(repo, nonce: str, status: str) -> None:
             request.status = status
 
 
+def _safe_request_status(repo, nonce: str, status: str) -> None:
+    try:
+        _request_status(repo, nonce, status)
+    except Exception as exc:
+        log.warning("jobstreet_request_status_update_failed", extra={"error_type": type(exc).__name__})
+
+
+def _safe_mark_status(repo, discord_user_id: str, status: str, error: str | None = None) -> None:
+    try:
+        mark_status(repo, discord_user_id, status, error)
+    except Exception as exc:
+        log.warning("jobstreet_connection_status_update_failed", extra={"error_type": type(exc).__name__})
+
+
 def _safe_session_error(exc: Exception) -> str:
     """Return a user-safe error without copying Browserless URLs or secrets."""
     if isinstance(exc, TimeoutError):
         return "The private browser session timed out before authentication finished."
+    if isinstance(exc, SQLAlchemyError):
+        return "The service database is temporarily unavailable. Try again in a moment."
     if isinstance(exc, ConnectionError):
         return str(exc)
     return "The private browser session could not be completed."
@@ -246,14 +263,14 @@ async def _run_interactive_session(cfg: Settings, repo, session: InteractiveSess
                 raise RuntimeError("Browserless did not return a live URL.")
             session.status = "WAITING_FOR_USER"
             session.ready.set()
-            _request_status(repo, session.nonce, "RUNNING")
+            _safe_request_status(repo, session.nonce, "RUNNING")
 
             deadline = asyncio.get_running_loop().time() + cfg.jobstreet_auth_timeout_seconds
             while asyncio.get_running_loop().time() < deadline:
                 if await _is_authenticated(page):
                     state = await context.storage_state()
                     save_verified_session(cfg, repo, session.discord_user_id, state)
-                    _request_status(repo, session.nonce, "COMPLETE")
+                    _safe_request_status(repo, session.nonce, "COMPLETE")
                     session.status = "READY"
                     session.ready.set()
                     return
@@ -263,8 +280,8 @@ async def _run_interactive_session(cfg: Settings, repo, session: InteractiveSess
         session.status = "ERROR"
         session.error = _safe_session_error(exc)
         session.ready.set()
-        _request_status(repo, session.nonce, "ERROR")
-        mark_status(repo, session.discord_user_id, "AUTH REQUIRED", session.error)
+        _safe_request_status(repo, session.nonce, "ERROR")
+        _safe_mark_status(repo, session.discord_user_id, "AUTH REQUIRED", session.error)
         # Do not log exception text: Playwright/Browserless errors can echo a
         # connection URL or a provider response containing sensitive data.
         log.warning("jobstreet_browser_session_failed", extra={"error_type": type(exc).__name__})
