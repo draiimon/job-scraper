@@ -127,6 +127,27 @@ def discord_task_done(task):
         logging.error('discord_bot_task_failed',extra={'error':str(error)},exc_info=(type(error),error,error.__traceback__))
     else:
         logging.warning('discord_bot_stopped')
+
+
+async def discord_worker():
+    """Keep the Discord gateway available without ever stopping job polling.
+
+    Discord may close a gateway connection transiently.  The bot client marks
+    itself unhealthy on exit; this supervisor retries with a bounded backoff
+    while the FastAPI lifespan remains active.  Cancellation during shutdown
+    is deliberately propagated so it never creates a zombie reconnect loop.
+    """
+    retry_delay = 5
+    while True:
+        try:
+            await run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_scan)
+            logging.warning('discord_bot_stopped; reconnecting')
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logging.exception('discord_bot_task_failed; reconnecting')
+        await asyncio.sleep(retry_delay)
+        retry_delay = min(retry_delay * 2, 60)
 @asynccontextmanager
 async def lifespan(app):
     repo.initialize_runtime_config(cfg); repo.expire_stale_jobs()
@@ -135,7 +156,7 @@ async def lifespan(app):
         else: await pipeline.discord.update_status(repo,scheduler_snapshot())
     except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
     task=asyncio.create_task(worker()) if cfg.polling_enabled else None
-    bot_task=asyncio.create_task(run_discord_bot(cfg,repo,manual_search,scheduler_snapshot,manual_scan)) if cfg.discord_bot_token else None
+    bot_task=asyncio.create_task(discord_worker()) if cfg.discord_bot_token else None
     if bot_task: bot_task.add_done_callback(discord_task_done)
     yield
     if task: task.cancel()
