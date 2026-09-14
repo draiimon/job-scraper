@@ -157,16 +157,22 @@ class Discord:
             r=await c.post(self.url,params={'with_components':'true'},json=payload); r.raise_for_status()
         return 'SENT'
     async def update_status(self, repo: Repository, scheduler_state: dict):
-        """Create one webhook status message, then edit it after each cycle."""
+        """Create one permanent control panel, then edit it after each cycle."""
         if not self.url: return 'SKIPPED'
         def stamp(value):
             if not value: return '—'
             return datetime.fromisoformat(value).astimezone(ZoneInfo('Asia/Manila')).strftime('%I:%M %p')
-        sources=scheduler_state.get('sources_working',0); linked=scheduler_state.get('linkedin_status','DISABLED'); jobstreet=scheduler_state.get('jobstreet_status','DISABLED')
-        payload={'embeds':[{'title':'𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑 𝐒𝐓𝐀𝐓𝐔𝐒','description':f"Service: ONLINE\nScheduler: {scheduler_state.get('status','RUNNING').upper()}\nLast scan: {stamp(scheduler_state.get('last_poll_at'))}\nNext scan: {stamp(scheduler_state.get('next_poll_at'))}\n\nSources: {sources} active\nJobs checked: {scheduler_state.get('jobs_checked',0)}\nNew recent jobs: {scheduler_state.get('new_recent_jobs',0)}\nAlerts sent: {scheduler_state.get('alerts_sent',0)}\nDatabase: CONNECTED\nLinkedIn: {linked}\nJobStreet: {jobstreet}",'footer':{'text':'Made by masoncalix'}}]}
+        sources=scheduler_state.get('sources_working',0); linked=scheduler_state.get('linkedin_status','DISABLED'); jobstreet=scheduler_state.get('jobstreet_status','DISABLED'); phase=scheduler_state.get('phase','complete')
+        system=f"Service\nONLINE\n\nScheduler\n{scheduler_state.get('status','RUNNING').upper()}\n\nLast scan\n{stamp(scheduler_state.get('last_poll_at'))}\n\nNext scan\n{stamp(scheduler_state.get('next_poll_at'))}\n\nNext batch\n{max(0,scheduler_state.get('seconds_until_next_poll',0))//60} minutes"
+        sources_text=f"Sources\n{sources} active\n\nLinkedIn\n{linked}\n\nJobStreet\n{jobstreet}\n\nDatabase\nCONNECTED\n\nDiscord\nCONNECTED"
+        scan_text='Checking recent active jobs…' if phase=='scanning' else f"Jobs checked: {scheduler_state.get('jobs_checked',0)}\nRecent PH tech jobs: {scheduler_state.get('recent_jobs_found',0)}\nNew qualifying jobs: {scheduler_state.get('new_recent_jobs',0)}\nAlerts sent: {scheduler_state.get('alerts_sent',0)}\nDuplicates ignored: {scheduler_state.get('duplicates_ignored',0)}"
+        payload={'embeds':[{'title':'𝐀𝐅𝐓𝐄𝐑 𝐇𝐎𝐔𝐑𝐒 𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑','description':'Your automated Philippine tech-job monitor is online.','color':0xF59E0B,'fields':[{'name':'𝐒𝐘𝐒𝐓𝐄𝐌 𝐒𝐓𝐀𝐓𝐔𝐒','value':system,'inline':True},{'name':'𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐈𝐎𝐍𝐒','value':sources_text,'inline':True},{'name':'𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆 𝐍𝐎𝐖' if phase=='scanning' else '𝐒𝐂𝐀𝐍 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄','value':scan_text,'inline':False},{'name':'𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄','value':'Auto scanning runs every 15 minutes. Use SEARCH JOBS for a specific role, or SCAN NOW for one protected immediate batch.','inline':False}],'footer':{'text':'After Hours Job Hunter • Made by masoncalix'}}]}
         if self.cfg and self.cfg.public_base_url:
-            payload['components']=[{'type':1,'components':[{'type':2,'style':5,'label':'SCAN NOW','url':f'{self.cfg.public_base_url.rstrip("/")}/scan'},{'type':2,'style':5,'label':'SEARCH JOBS','url':f'{self.cfg.public_base_url.rstrip("/")}/search'}]}]
-        existing=repo.state('discord_status_message_id')
+            base=self.cfg.public_base_url.rstrip('/'); scan=ActionTokens(self.cfg).issue_control('scan')
+            row1=[{'type':2,'style':5,'label':'SEARCH JOBS','url':f'{base}/search'}]
+            if scan: row1.insert(0,{'type':2,'style':5,'label':'SCAN NOW','url':f'{base}/control/scan/{scan}'})
+            payload['components']=[{'type':1,'components':row1},{'type':1,'components':[{'type':2,'style':5,'label':'VIEW STATUS','url':f'{base}/status'},{'type':2,'style':5,'label':'VIEW LATEST JOBS','url':f'{base}/latest-page'}]},{'type':1,'components':[{'type':2,'style':5,'label':'HELP / HOW TO USE','url':f'{base}/help'}]}]
+        existing=repo.state('discord_control_panel_message_id') or repo.state('discord_status_message_id')
         async with httpx.AsyncClient(timeout=15) as client:
             if existing:
                 response=await client.patch(f'{self.url}/messages/{existing}',json=payload)
@@ -174,18 +180,7 @@ class Discord:
                 else: response.raise_for_status(); return 'UPDATED'
             response=await client.post(self.url,params={'wait':'true'},json=payload); response.raise_for_status()
             message_id=response.json().get('id')
-            if message_id: repo.set_state('discord_status_message_id',message_id)
-        return 'CREATED'
-    async def update_welcome(self, repo: Repository):
-        if not self.url: return 'SKIPPED'
-        payload={'embeds':[{'title':'𝐖𝐄𝐋𝐂𝐎𝐌𝐄 — 𝐀𝐅𝐓𝐄𝐑 𝐇𝐎𝐔𝐑𝐒 𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑','description':'Find recent entry-level PH tech jobs without alert spam.\n\n1. Use **SEARCH JOBS** for a specific role.\n2. Use **SCAN NOW** only when you need one immediate batch.\n3. Open **APPLY NOW** to review before applying.\n4. Save or skip jobs to keep your feed clean.','footer':{'text':'Made by masoncalix'}}]}
-        existing=repo.state('discord_welcome_message_id')
-        async with httpx.AsyncClient(timeout=15) as client:
-            if existing:
-                response=await client.patch(f'{self.url}/messages/{existing}',json=payload)
-                if response.status_code!=404: response.raise_for_status(); return 'UPDATED'
-            response=await client.post(self.url,params={'wait':'true'},json=payload); response.raise_for_status(); message_id=response.json().get('id')
-            if message_id: repo.set_state('discord_welcome_message_id',message_id)
+            if message_id: repo.set_state('discord_control_panel_message_id',message_id)
         return 'CREATED'
 class Pipeline:
     def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0

@@ -83,6 +83,9 @@ def test_signed_actions_expire_and_cannot_be_tampered():
     token=tokens.issue(7,'saved',60)
     assert tokens.verify(token,'saved')['j'] == 7
     assert tokens.verify(token+'x') is None
+    control=tokens.issue_control('scan',60)
+    assert tokens.verify_control(control,'scan')
+    assert not tokens.verify_control(control,'other')
 
 def test_ai_revision_validator_rejects_fabricated_claims():
     assert valid_revision('A'*400)
@@ -189,6 +192,26 @@ async def test_brightdata_429_respects_retry_cap(monkeypatch):
     monkeypatch.setattr('src.brightdata.httpx.AsyncClient',lambda **_:Client())
     with pytest.raises(SourceError,match='temporarily'):
         await BrightDataClient('token',retries=0).scrape('dataset',[{'q':'test'}])
+
+@pytest.mark.asyncio
+async def test_control_panel_persists_and_edits_one_message(tmp_path,monkeypatch):
+    repo=Repository(f'sqlite:///{tmp_path}/panel.db'); repo.create_schema(); calls=[]
+    class Response:
+        status_code=200
+        def raise_for_status(self): pass
+        def json(self): return {'id':'panel-1'}
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self,*_): return None
+        async def post(self,*args,**kwargs): calls.append('post'); return Response()
+        async def patch(self,*args,**kwargs): calls.append('patch'); return Response()
+    monkeypatch.setattr('src.services.httpx.AsyncClient',lambda **_:Client())
+    cfg=Settings(discord_webhook_url='https://discord.example/webhook',app_secret_key='secret',public_base_url='https://agent.example')
+    discord=Discord(cfg.discord_webhook_url,[],cfg); state={'status':'running','seconds_until_next_poll':900}
+    assert await discord.update_status(repo,state)=='CREATED'
+    assert repo.state('discord_control_panel_message_id')=='panel-1'
+    assert await discord.update_status(repo,state)=='UPDATED'
+    assert calls==['post','patch']
 
 @pytest.mark.asyncio
 async def test_gemini_429_uses_pool_cooldown_and_cache():

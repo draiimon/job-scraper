@@ -36,12 +36,15 @@ def scheduler_snapshot():
 async def poll_once():
     async with poll_lock:
         started=datetime.now(timezone.utc)
-        repo.set_state('scheduler',{'status':'running','last_poll_at':iso(started),'next_poll_at':iso(started+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0})
+        repo.set_state('scheduler',{'status':'running','phase':'scanning','last_poll_at':iso(started),'next_poll_at':iso(started+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0})
+        try: await pipeline.discord.update_status(repo,scheduler_snapshot())
+        except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
         pipeline.begin_cycle()
         outcomes=await asyncio.gather(*(pipeline.run_source(s) for s in configured_sources(cfg.source_targets)+brightdata_sources(cfg,repo)))
         await pipeline.retry_notifications()
         finished=datetime.now(timezone.utc)
-        state={'status':'running','last_poll_at':iso(finished),'next_poll_at':iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':sum(x['discovered'] for x in outcomes),'new_recent_jobs':sum(x['new'] for x in outcomes),'alerts_sent':pipeline._cycle_notifications}
+        checked=sum(x['discovered'] for x in outcomes); new=sum(x['new'] for x in outcomes); filtered=sum(x['filtered'] for x in outcomes)
+        state={'status':'running','phase':'complete','last_poll_at':iso(finished),'next_poll_at':iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':pipeline._cycle_notifications,'duplicates_ignored':max(0,checked-new-filtered)}
         # status update is best-effort: a webhook outage never stops polling.
         state.update({'sources_working':0,'linkedin_status':'READY' if cfg.brightdata_api_token else 'DISABLED','jobstreet_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_jobstreet_dataset_id and cfg.brightdata_inputs('jobstreet') else 'DISABLED'})
         repo.set_state('scheduler',state)
@@ -55,8 +58,8 @@ async def worker():
 @asynccontextmanager
 async def lifespan(app):
     repo.create_schema(); repo.expire_stale_jobs()
-    try: await pipeline.discord.update_welcome(repo)
-    except Exception as exc: logging.warning('discord_welcome_update_failed',extra={'error':str(exc)})
+    try: await pipeline.discord.update_status(repo,scheduler_snapshot())
+    except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
     task=asyncio.create_task(worker()) if cfg.polling_enabled else None
     yield
     if task: task.cancel()
@@ -72,9 +75,6 @@ def health():
     with repo.sessions() as s:
         sources=s.scalars(select(SourceHealth)).all()
     return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_webhook_url),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
-@app.post('/run')
-async def run_once():
-    return await manual_scan()
 async def manual_scan():
     if poll_lock.locked(): raise HTTPException(409,'scan already running')
     previous=repo.state('manual_scan',{}) or {}; now=datetime.now(timezone.utc)
@@ -84,12 +84,26 @@ async def manual_scan():
         if remaining>0: raise HTTPException(429,f'scan cooldown: try again in {remaining} seconds')
     repo.set_state('manual_scan',{'at':iso(now)})
     return await poll_once()
-@app.get('/scan',response_class=HTMLResponse)
-def scan_page():
-    return HTMLResponse('''<!doctype html><title>Run one job scan</title><h1>Run one job scan</h1><p>This runs one immediate batch. To prevent alert spam, it has a cooldown.</p><button id="scan">SCAN NOW</button><p id="result"></p><script>document.getElementById('scan').onclick=async()=>{let r=await fetch('/scan-now',{method:'POST'}),d=await r.json();document.getElementById('result').textContent=r.ok?'Scan complete.':(d.detail||'Scan unavailable.')}</script>''')
-@app.post('/scan-now')
-async def scan_now():
+@app.get('/control/scan/{token}',response_class=HTMLResponse)
+def scan_confirmation(token:str):
+    if not ActionTokens(cfg).verify_control(token,'scan'): raise HTTPException(403,'invalid or expired scan link')
+    return HTMLResponse(f'''<!doctype html><title>Start scan</title><h1>Start one job scan</h1><p>This performs one immediate batch. Automatic scans continue normally.</p><button id="scan">START SCAN</button><p id="result"></p><script>document.getElementById('scan').onclick=async()=>{{let r=await fetch('/control/scan/{token}',{{method:'POST'}}),d=await r.json();document.getElementById('result').textContent=r.ok?'Scan complete.':(d.detail||'Scan unavailable.')}};</script>''')
+@app.post('/control/scan/{token}')
+async def scan_now(token:str):
+    if not ActionTokens(cfg).verify_control(token,'scan'): raise HTTPException(403,'invalid or expired scan link')
     return await manual_scan()
+@app.get('/status',response_class=HTMLResponse)
+def status_page():
+    state=scheduler_snapshot()
+    return HTMLResponse(f'<h1>Job Hunter Status</h1><pre>{escape(str(state))}</pre><p><a href="/search">Search jobs</a></p>')
+@app.get('/latest-page',response_class=HTMLResponse)
+def latest_page():
+    with repo.sessions() as s: rows=s.scalars(select(Job).where(Job.status!=JobStatus.EXPIRED.value,Job.score>=cfg.min_notify_score).order_by(Job.date_posted.desc()).limit(20)).all()
+    cards=''.join(f'<article><h2>{escape(x.title)}</h2><p>{escape(x.company)} · {escape(x.location)} · {x.score}% match</p><p><a href="{escape(x.url,quote=True)}">View job</a></p></article>' for x in rows)
+    return HTMLResponse(f'<h1>Latest qualifying jobs</h1>{cards or "<p>No recent qualifying jobs yet.</p>"}')
+@app.get('/help',response_class=HTMLResponse)
+def help_page():
+    return HTMLResponse('''<h1>How to use After Hours Job Hunter</h1><h2>Auto scanning</h2><p>Runs every 15 minutes for recent PH entry-level tech roles.</p><h2>Scan now</h2><p>Runs one protected immediate scan and has a cooldown.</p><h2>Search jobs</h2><p>Find a specific role with freshness and location filters.</p><h2>Apply, Save, Skip</h2><p>Apply opens review, Save keeps a job for later, and Skip stops future alerts.</p>''')
 @app.get('/jobs')
 def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
     with repo.sessions() as s:

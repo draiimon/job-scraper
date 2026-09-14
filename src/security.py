@@ -16,3 +16,15 @@ class ActionTokens:
             payload=json.loads(raw)
             return payload if payload['e']>=time.time() and (action is None or payload['a']==action) else None
         except (ValueError,KeyError,json.JSONDecodeError): return None
+    def issue_control(self, action: str, expires_seconds: int=900) -> str | None:
+        if not self.secret: return None
+        raw=json.dumps({'c':action,'e':int(time.time())+expires_seconds},separators=(',',':')).encode()
+        sig=hmac.new(self.secret,raw,hashlib.sha256).digest()
+        return base64.urlsafe_b64encode(raw+sig).decode().rstrip('=')
+    def verify_control(self, token: str, action: str) -> bool:
+        if not self.secret: return False
+        try:
+            data=base64.urlsafe_b64decode(token+'='*(-len(token)%4)); raw,sig=data[:-32],data[-32:]
+            payload=json.loads(raw)
+            return hmac.compare_digest(sig,hmac.new(self.secret,raw,hashlib.sha256).digest()) and payload.get('c')==action and payload['e']>=time.time()
+        except (ValueError,KeyError,json.JSONDecodeError): return False
