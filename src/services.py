@@ -174,11 +174,17 @@ class Discord:
             payload['components']=[{'type':1,'components':row1},{'type':1,'components':[{'type':2,'style':5,'label':'VIEW STATUS','url':f'{base}/status'},{'type':2,'style':5,'label':'VIEW LATEST JOBS','url':f'{base}/latest-page'}]},{'type':1,'components':[{'type':2,'style':5,'label':'HELP / HOW TO USE','url':f'{base}/help'}]}]
         existing=repo.state('discord_control_panel_message_id') or repo.state('discord_status_message_id')
         async with httpx.AsyncClient(timeout=15) as client:
+            # Remove the legacy separate welcome message once during migration;
+            # the control panel now owns both status and tutorial content.
+            legacy=repo.state('discord_welcome_message_id')
+            if legacy:
+                removed=await client.delete(f'{self.url}/messages/{legacy}')
+                if removed.status_code in (204,404): repo.set_state('discord_welcome_message_id',None)
             if existing:
-                response=await client.patch(f'{self.url}/messages/{existing}',json=payload)
+                response=await client.patch(f'{self.url}/messages/{existing}',params={'with_components':'true'},json=payload)
                 if response.status_code==404: existing=None
                 else: response.raise_for_status(); return 'UPDATED'
-            response=await client.post(self.url,params={'wait':'true'},json=payload); response.raise_for_status()
+            response=await client.post(self.url,params={'wait':'true','with_components':'true'},json=payload); response.raise_for_status()
             message_id=response.json().get('id')
             if message_id: repo.set_state('discord_control_panel_message_id',message_id)
         return 'CREATED'

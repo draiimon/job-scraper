@@ -205,6 +205,7 @@ async def test_control_panel_persists_and_edits_one_message(tmp_path,monkeypatch
         async def __aexit__(self,*_): return None
         async def post(self,*args,**kwargs): calls.append('post'); return Response()
         async def patch(self,*args,**kwargs): calls.append('patch'); return Response()
+        async def delete(self,*args,**kwargs): calls.append('delete'); return Response()
     monkeypatch.setattr('src.services.httpx.AsyncClient',lambda **_:Client())
     cfg=Settings(discord_webhook_url='https://discord.example/webhook',app_secret_key='secret',public_base_url='https://agent.example')
     discord=Discord(cfg.discord_webhook_url,[],cfg); state={'status':'running','seconds_until_next_poll':900}
