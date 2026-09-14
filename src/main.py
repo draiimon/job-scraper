@@ -17,6 +17,7 @@ from .ai import gemini
 from .security import ActionTokens
 from .brightdata import brightdata_sources
 from .manual_search import ManualJobSearch
+from .discord_bot import run_discord_bot
 logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
 cfg=settings(); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
 manual_search=ManualJobSearch(cfg,repo)
@@ -61,8 +62,13 @@ async def lifespan(app):
     try: await pipeline.discord.update_status(repo,scheduler_snapshot())
     except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
     task=asyncio.create_task(worker()) if cfg.polling_enabled else None
+    bot_task=asyncio.create_task(run_discord_bot(cfg,repo,manual_search,scheduler_snapshot,manual_scan)) if cfg.discord_bot_token else None
     yield
     if task: task.cancel()
+    if bot_task:
+        bot_task.cancel()
+        try: await bot_task
+        except asyncio.CancelledError: pass
 app=FastAPI(title='Philippine Job Agent',lifespan=lifespan)
 @app.api_route('/',methods=['GET','HEAD'],include_in_schema=False,response_class=HTMLResponse)
 def home():

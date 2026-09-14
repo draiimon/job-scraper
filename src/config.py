@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
     database_url: str = "sqlite:///./data/job_agent.sqlite3"
     discord_webhook_url: str | None = None
+    discord_bot_token: str | None = None
+    discord_bot_guild_id: str | None = None
     discord_motivation: str = ""
     discord_motivations_json: str = ""
     min_notify_score: int = 70
