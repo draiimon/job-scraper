@@ -17,8 +17,23 @@ class NormalizedJob:
         return hashlib.sha256(base.encode()).hexdigest()
 
 PRIMARY_ROLE_TERMS=("devops", "cloud", "infrastructure", "platform engineer", "systems engineer", "linux engineer", "noc", "site reliability", "cloud operations")
-BROAD_ROLE_TERMS=("it support", "technical support", "help desk", "service desk", "desktop support", "application support", "software support", "technical operations", "it operations", "it administrator", "system administrator", "network administrator", "network engineer", "database support", "database administrator", "software engineer", "software developer", "web developer", "backend developer", "frontend developer", "full stack", "quality assurance", "software testing", "automation testing", "technical analyst", "it analyst", "systems analyst", "business systems analyst", "application analyst", "technical implementation", "technical consultant", "associate engineer", "graduate engineer", "it trainee", "technology trainee", "cybersecurity", "soc analyst", "security operations", "data analyst", "data engineer", "machine learning", "computer science graduate", "information technology graduate")
-NEGATIVE=("senior", " sr", "lead", "principal", "staff engineer", "manager", "director", "head of", "architect")
+BROAD_ROLE_TERMS=(
+    "it support", "technical support", "help desk", "service desk", "desktop support",
+    "application support", "software support", "technical operations", "it operations",
+    "it administrator", "system administrator", "server administrator", "network administrator",
+    "network engineer", "network operations", "database support", "database administrator",
+    "software engineer", "software developer", "web developer", "backend developer",
+    "frontend developer", "full stack", "python developer", "java developer", "php developer",
+    "node.js developer", "quality assurance", "software tester", "software testing",
+    "automation qa", "automation testing", "technical analyst", "it analyst", "systems analyst",
+    "business systems analyst", "application analyst", "technical implementation",
+    "technical consultant", "associate engineer", "graduate engineer", "it trainee",
+    "technology trainee", "cybersecurity", "soc analyst", "junior security",
+    "security operations", "data analyst", "data engineer", "machine learning",
+    "computer science graduate", "information technology graduate", "cloud support",
+)
+EXCLUDED_ROLE_TERMS=("accounting", "finance", "human resources", "hr ", "sales", "marketing", "recruiter", "recruitment", "virtual assistant", "generic va", "customer service")
+NEGATIVE=("senior", "lead", "principal", "staff engineer", "manager", "director", "head of", "architect")
 JUNIOR=("junior", "entry level", "entry-level", "associate", "graduate", "fresh graduate", "trainee", "0-1 years", "0-2 years", "1 year experience", "new graduate")
 SKILLS={"aws":25,"docker":20,"terraform":20,"linux":15,"ubuntu":15,"ci/cd":15,"github actions":15,"kubernetes":10,"git":5,"bash":5,"nginx":5,"python":3}
 PH_LOCATIONS=("philippines", "metro manila", "makati", "taguig", "bgc", "pasig", "quezon city", "manila", "alabang", "cavite", "bacoor", "remote")
@@ -32,29 +47,36 @@ def is_ph_location(job: NormalizedJob) -> bool:
     place=clean(f"{job.location} {job.work_setup or ''}")
     return any(x in place for x in PH_LOCATIONS) and not ("remote" in place and "philippines" not in place and "ph" not in place)
 def freshness(job: NormalizedJob, now: datetime | None=None) -> tuple[int,str|None,bool]:
-    """Return score adjustment, human note, and whether an active listing may alert."""
+    """Return score adjustment, human note, and whether a listing is in-window.
+
+    The source timestamp is authoritative. Discovery time must never make an
+    old listing look new, and the 90-day window is intentionally inclusive.
+    """
     if not job.date_posted: return -20,'Posted date unavailable',False
     reference=now or datetime.now(timezone.utc)
     posted=job.date_posted
     if reference.tzinfo is None: reference=reference.replace(tzinfo=timezone.utc)
     if posted.tzinfo is None: posted=posted.replace(tzinfo=timezone.utc)
     age=max(0,(reference-posted).total_seconds()/86400)
-    if age<=3: return 15,'Posted within 3 days',True
+    if age<=1: return 15,'Posted within 1 day',True
     if age<=7: return 8,'Posted within 7 days',True
-    if age<=14: return -5,'Posted 8–14 days ago',True
-    if age<=30: return -20,'Posted 15–30 days ago',True
-    return -100,'Stale posting (over 30 days)',False
+    if age<=14: return 3,'Posted 8–14 days ago',True
+    if age<=30: return 0,'Posted 15–30 days ago',True
+    if age<=60: return -5,'Posted 31–60 days ago',True
+    if age<=90: return -10,'Posted 61–90 days ago',True
+    return -100,'Stale posting (over 90 days)',False
 def is_active_listing(job: NormalizedJob) -> bool:
     # Public ATS listings returned by their current board endpoints are active;
     # malformed/non-HTTP links are never allowed through.
     return (job.application_url or job.url).startswith(('https://','http://'))
 def evaluate(job: NormalizedJob, now: datetime | None=None) -> tuple[int,list[str],list[str],bool]:
     text=clean(f"{job.title} {job.description}"); title=clean(job.title); score=0; reasons=[]; warnings=[]
+    excluded=any(x in title for x in EXCLUDED_ROLE_TERMS)
     primary_in_title=any(x in title for x in PRIMARY_ROLE_TERMS)
     broad=any(x in title for x in BROAD_ROLE_TERMS)
     technical_context=any(x in title for x in ('engineer','developer','support','analyst','administrator','technician','trainee','graduate'))
     primary=primary_in_title or (technical_context and any(x in text for x in PRIMARY_ROLE_TERMS))
-    relevant=primary or broad
+    relevant=(primary or broad) and not excluded
     if primary:
         score+=35; reasons.append("Relevant cloud/DevOps/infrastructure role")
     elif broad:
@@ -66,12 +88,15 @@ def evaluate(job: NormalizedJob, now: datetime | None=None) -> tuple[int,list[st
     if senior_role: score-=100; warnings.append("Senior-level role")
     if re.search(r"\b(?:5|6|7|8|9|10)\+?\s*years?", text): score-=70; warnings.append("Requires 5+ years")
     elif re.search(r"\b[34]\+?\s*years?", text): score-=40; warnings.append("Requires 3-4 years")
-    if not relevant: score-=50; warnings.append("Role is outside technology disciplines")
+    if excluded:
+        score-=100; warnings.append("Role is outside the computer/IT search scope")
+    elif not relevant: score-=50; warnings.append("Role is outside technology disciplines")
     freshness_points,freshness_reason,fresh=freshness(job,now)
     score+=freshness_points
     if freshness_reason:
         (reasons if freshness_points>=0 else warnings).append(freshness_reason)
-    return max(0,min(100,score)), reasons, warnings, relevant and not senior_role and score >= 0
+    experience_mismatch=bool(re.search(r'\b(?:4|5|6|7|8|9|10)\+?\s*years?', text))
+    return max(0,min(100,score)), reasons, warnings, relevant and not senior_role and not experience_mismatch and score >= 0
 
 def extract_skills(job: NormalizedJob) -> list[str]:
     text=clean(f"{job.title} {job.description}")

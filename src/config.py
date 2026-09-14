@@ -77,8 +77,9 @@ class Settings(BaseSettings):
     jobstreet_base_url: str = "https://ph.jobstreet.com"
     jobstreet_login_url: str = ""
     jobstreet_location: str = "Philippines"
-    jobstreet_search_terms_json: str = '["DevOps", "Cloud", "IT Support"]'
+    jobstreet_search_terms_json: str = '["software", "developer", "IT support", "technical support", "DevOps", "cloud", "infrastructure", "systems", "network", "QA", "cybersecurity", "application support"]'
     jobstreet_max_results: int = 50
+    jobstreet_max_pages: int = 5
     jobstreet_auth_timeout_seconds: int = 600
     jobstreet_scan_timeout_seconds: int = 60
 
@@ -147,7 +148,7 @@ class Settings(BaseSettings):
                 return [str(value).strip() for value in values if str(value).strip()]
         except json.JSONDecodeError:
             pass
-        return ["DevOps", "Cloud", "IT Support"]
+        return ["software", "developer", "IT support", "technical support", "DevOps", "cloud", "infrastructure", "systems", "network", "QA", "cybersecurity", "application support"]
 
 @lru_cache
 def settings() -> Settings: return Settings()

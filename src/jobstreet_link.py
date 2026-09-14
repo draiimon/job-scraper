@@ -241,18 +241,22 @@ def _safe_session_error(exc: Exception) -> str:
 
 async def _run_interactive_session(cfg: Settings, repo, session: InteractiveSession) -> None:
     browser = None
+    stage = "starting"
     try:
         from playwright.async_api import async_playwright
         from .jobstreet import _is_authenticated
 
         async with async_playwright() as playwright:
+            stage = "connect_over_cdp"
             browser = await playwright.chromium.connect_over_cdp(browserless_cdp_endpoint(cfg))
             contexts = browser.contexts
             context = contexts[0] if contexts else await browser.new_context()
+            stage = "open_jobstreet_login"
             page = await context.new_page()
-            login_url = cfg.jobstreet_login_url or f"{cfg.jobstreet_base_url.rstrip('/')}/login"
+            login_url = cfg.jobstreet_login_url or f"{cfg.jobstreet_base_url.rstrip('/')}/oauth/login"
             await page.goto(login_url, wait_until="domcontentloaded", timeout=60_000)
 
+            stage = "create_live_url"
             cdp = await context.new_cdp_session(page)
             response = await cdp.send(
                 "Browserless.liveURL",
@@ -265,6 +269,7 @@ async def _run_interactive_session(cfg: Settings, repo, session: InteractiveSess
             session.ready.set()
             _safe_request_status(repo, session.nonce, "RUNNING")
 
+            stage = "wait_for_user_login"
             deadline = asyncio.get_running_loop().time() + cfg.jobstreet_auth_timeout_seconds
             while asyncio.get_running_loop().time() < deadline:
                 if await _is_authenticated(page):
@@ -284,7 +289,12 @@ async def _run_interactive_session(cfg: Settings, repo, session: InteractiveSess
         _safe_mark_status(repo, session.discord_user_id, "AUTH REQUIRED", session.error)
         # Do not log exception text: Playwright/Browserless errors can echo a
         # connection URL or a provider response containing sensitive data.
-        log.warning("jobstreet_browser_session_failed", extra={"error_type": type(exc).__name__})
+        log.warning(
+            "jobstreet_browser_session_failed stage=%s error_type=%s",
+            stage,
+            type(exc).__name__,
+            exc_info=True,
+        )
     finally:
         if browser is not None:
             try:

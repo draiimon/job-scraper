@@ -275,14 +275,29 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         if not jobs: await interaction.followup.send('No recent qualifying jobs found.',ephemeral=True); return
         for job in jobs[:3]:
             embed,view=card(job); await interaction.followup.send(embed=embed,view=view,ephemeral=True)
-    async def load_view_all_jobs(page: int, page_size: int = 5):
-        from sqlalchemy import func, select
+    async def load_view_all_jobs(page: int, page_size: int = 5, days: int = 90, min_score: int = 0):
+        from datetime import datetime, timedelta, timezone
+        from sqlalchemy import case, func, select
         from .models import Job, JobStatus
+        cutoff=datetime.now(timezone.utc)-timedelta(days=max(1,min(90,int(days))))
         def load():
             with repo.sessions() as s:
-                base=select(Job).where(Job.status!=JobStatus.EXPIRED.value,Job.date_posted.is_not(None),Job.score>=cfg.min_notify_score)
+                source_quality=case(
+                    (Job.source.like('greenhouse:%'),3),
+                    (Job.source.like('ashby:%'),3),
+                    (Job.source.like('lever:%'),3),
+                    (Job.source.like('brightdata:%'),2),
+                    (Job.source.like('jobstreet:%'),2),
+                    else_=1,
+                )
+                base=select(Job).where(
+                    Job.status!=JobStatus.EXPIRED.value,
+                    Job.date_posted.is_not(None),
+                    Job.date_posted>=cutoff,
+                    Job.score>=max(0,min(100,int(min_score))),
+                )
                 total=s.scalar(select(func.count()).select_from(base.subquery())) or 0
-                rows=s.scalars(base.order_by(Job.date_posted.desc()).offset(page*page_size).limit(page_size)).all()
+                rows=s.scalars(base.order_by(Job.date_posted.desc(),Job.score.desc(),source_quality.desc()).offset(page*page_size).limit(page_size)).all()
                 return rows,total
         return await asyncio.to_thread(load)
     def view_all_embed(jobs, page, total):
@@ -293,7 +308,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             location=(job.location or 'Location not stated').replace(', Philippines','').strip()
             lines.append(f'`{number:02}  {posted}  ·  {job.score}% MATCH`\n**{job.title}**\n{job.company} · {location}')
         body='\n\n'.join(lines) if lines else 'No recent qualifying jobs are stored yet.'
-        embed=styled_embed('𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃',f'Recent stored matches · newest posted first\n\n{body}')
+        embed=styled_embed('𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃',f'Active stored computer jobs from the last 90 days · newest/reposted first\n\n{body}')
         embed.add_field(
             name='𝐍𝐀𝐕𝐈𝐆𝐀𝐓𝐈𝐎𝐍',
             value=(
@@ -331,7 +346,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         async def next(self,interaction,button):
             await interaction.response.defer()
             self.page=min(self.total_pages-1,self.page+1); await self.render(interaction.message)
-    async def send_view_all(destination, ephemeral=False):
+    async def send_view_all(destination, ephemeral=False, page=0, days=90, min_score=0):
         send_options={}
         if ephemeral:
             send_options['ephemeral']=True
@@ -340,9 +355,9 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             **send_options,
         )
         try:
-            jobs,total=await load_view_all_jobs(0)
-            embed,pages=view_all_embed(jobs,0,total)
-            await loading.edit(embed=embed,view=ViewAllJobsView(jobs,0,pages))
+            jobs,total=await load_view_all_jobs(page, days, min_score)
+            embed,pages=view_all_embed(jobs,page,total)
+            await loading.edit(embed=embed,view=ViewAllJobsView(jobs,page,pages))
         except Exception as exc:
             log.warning('discord_view_all_failed',extra={'error_type':type(exc).__name__})
             await loading.edit(
@@ -436,15 +451,18 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
 
     async def send_jobstreet_link(interaction, user_id):
         from .jobstreet_link import browserless_ready, create_request
+        # A database write and Browserless setup must happen after Discord's
+        # three-second acknowledgement window, just like scan/search work.
+        await interaction.response.defer(ephemeral=True, thinking=True)
         if not cfg.public_base_url:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄',
                                    'Set PUBLIC_BASE_URL before creating a private setup link.'),
                 ephemeral=True,
             )
             return
         if not browserless_ready(cfg):
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄',
                                    'The private Browserless connection service is not configured yet.'),
                 ephemeral=True,
@@ -458,7 +476,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         )
         embed.add_field(name='𝐒𝐄𝐓𝐔𝐏 𝐋𝐈𝐍𝐊',value=f'[OPEN PRIVATE SETUP]({url})',inline=False)
         embed.add_field(name='𝐄𝐗𝐏𝐈𝐑𝐘',value='This one-time link expires in 10 minutes.',inline=False)
-        await interaction.response.send_message(embed=embed,ephemeral=True)
+        await interaction.followup.send(embed=embed,ephemeral=True)
 
     class JobStreetView(discord.ui.View):
         def __init__(self):
@@ -664,7 +682,11 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             for job in jobs:
                 embed,view=card(job); await message.channel.send(embed=embed,view=view)
         elif command=='viewall':
-            await send_view_all(message.channel)
+            try:
+                requested_page=max(1,int(argument.split()[0]))-1 if argument else 0
+            except ValueError:
+                requested_page=0
+            await send_view_all(message.channel,page=requested_page)
         elif command=='status': await message.channel.send(embed=await panel_embed())
         elif command=='scan':
             if scan_task and not scan_task.done(): await message.channel.send(embed=styled_embed('𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆','A scan is already running.')); return

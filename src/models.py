@@ -53,7 +53,10 @@ class SourceHealth(Base):
 class AppState(Base):
     __tablename__='app_state'
     key: Mapped[str] = mapped_column(String(100),primary_key=True)
-    value: Mapped[str] = mapped_column(String(500),default='')
+    # Scheduler snapshots now include real bulk-scan counters and can exceed
+    # the legacy 500-character limit. Existing deployments are upgraded by
+    # Repository.create_schema().
+    value: Mapped[str] = mapped_column(Text,default='')
 class AppSetting(Base):
     """Non-secret runtime configuration loaded after database startup."""
     __tablename__='app_settings'

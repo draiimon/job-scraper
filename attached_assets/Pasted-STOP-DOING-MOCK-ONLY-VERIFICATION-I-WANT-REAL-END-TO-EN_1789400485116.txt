@@ -1,0 +1,535 @@
+STOP DOING MOCK-ONLY VERIFICATION.
+
+I WANT REAL END-TO-END TESTING BY YOU.
+
+Run the application yourself, exercise the actual production code paths, fix failures, push, and verify Render.
+
+==================================================
+1. JOBSTREET MUST FEEL AUTOMATIC
+==================================================
+
+Current UX is too broken/manual.
+
+Target:
+
+v!jobstreet
+→ CONNECT JOBSTREET
+→ interaction ACK immediately
+→ signed private setup URL
+→ open setup page
+→ Browserless session created
+→ automatically navigate that browser to the REAL JobStreet login page
+→ user only needs to manually complete Google login / 2FA / CAPTCHA
+→ verify session
+→ JobStreet READY
+
+I do NOT want another useless page that just says authentication required.
+
+If technically possible, after pressing:
+
+START JOBSTREET LOGIN
+
+automatically redirect/open the Browserless Live URL already navigated to JobStreet.
+
+Minimize clicks.
+
+==================================================
+2. YOU MUST TEST IT YOURSELF
+==================================================
+
+Actually run:
+
+- real app startup
+- database
+- Discord gateway
+- signed link generation
+- setup URL
+- Browserless CDP
+- temporary browser
+- JobStreet navigation
+
+Do a REAL non-authenticated navigation test against JobStreet.
+
+Verify:
+
+Browser opens
+→ JobStreet loads
+→ login page is reachable
+→ Live URL works
+
+You cannot complete my Google credentials yourself, so stop only at:
+
+WAITING FOR USER LOGIN
+
+That is the ONLY acceptable manual step.
+
+Do not call JobStreet PASS just because unit tests passed.
+
+==================================================
+3. FIX DISCORD TIMEOUT
+==================================================
+
+CONNECT JOBSTREET must defer/ACK immediately.
+
+Never again:
+
+"AFTER HOURS JOB HUNTER didn't respond in time"
+
+Slow Browserless/database work happens AFTER defer.
+
+==================================================
+4. BULK JOB DISCOVERY — EXPAND HARD
+==================================================
+
+The current number of jobs is too small.
+
+I want BROAD COMPUTER/TECH DISCOVERY.
+
+Search up to:
+
+PAST 90 DAYS
+
+But the listing must still be accessible/active.
+
+Do NOT limit discovery only to DevOps.
+
+Computer-related roles include:
+
+DevOps
+Cloud
+Infrastructure
+Platform
+SRE
+Linux
+Systems Administrator
+Server Administrator
+Network / NOC
+IT Support
+Technical Support
+Help Desk
+Service Desk
+Application Support
+IT Operations
+Systems Analyst
+Software Engineer
+Software Developer
+Backend
+Frontend
+Full Stack
+Web Developer
+Python Developer
+Java Developer
+PHP Developer
+Node.js Developer
+QA
+Software Tester
+Automation QA
+Cloud Support
+Database-related technical roles
+Cybersecurity
+SOC
+Junior Security
+Technical Operations
+Other legitimate entry-level/junior IT and computer-related roles
+
+Exclude:
+
+Accounting
+Finance
+HR
+Sales
+Marketing
+generic VA
+generic nontechnical customer service
+unrelated engineering
+non-computer jobs
+
+==================================================
+5. 90-DAY FRESHNESS
+==================================================
+
+Change discovery window:
+
+0–1 day = highest
+2–7 days = very high
+8–14 days = high
+15–30 days = normal
+31–60 days = lower
+61–90 days = lowest but STILL ELIGIBLE
+
+>90 days:
+skip unless there is a verified recent repost/reactivation.
+
+IMPORTANT:
+
+Age alone should not reject a computer-related job within 90 days.
+
+But verify that the job URL/listing is still active where practical.
+
+A newly discovered 80-day-old listing is NOT "new".
+
+Display its real age.
+
+==================================================
+6. REPOSTS
+==================================================
+
+Real repost/reactivation:
+
+new timestamp
+new posting ID
+or clear republish evidence
+
+→ treat as fresh repost.
+
+Do NOT fake freshness from discovery time.
+
+==================================================
+7. BULK SOURCE COVERAGE
+==================================================
+
+For every scheduled/full scan use ALL READY sources:
+
+Public ATS/company JSON sources
++
+LinkedIn if READY
++
+JobStreet if READY
+
+Do not stop after the first page.
+
+Where supported, implement pagination/batching until:
+
+- source has no more results
+- 90-day cutoff reached
+- safe source limit reached
+- rate limit requires stopping
+
+Use concurrency safely.
+
+Do not hammer websites.
+
+==================================================
+8. JOBSTREET BULK DISCOVERY
+==================================================
+
+When JobStreet becomes READY:
+
+search multiple technical query families.
+
+Do not search one keyword only.
+
+Use query groups such as:
+
+software
+developer
+IT support
+technical support
+DevOps
+cloud
+infrastructure
+systems
+network
+QA
+cybersecurity
+application support
+
+Paginate results where possible.
+
+Normalize and deduplicate before storing.
+
+==================================================
+9. LINKEDIN BULK DISCOVERY
+==================================================
+
+LinkedIn currently shows READY in production.
+
+Expand beyond only:
+
+DevOps
+Cloud
+IT Support
+
+Use the same broad computer-related role families.
+
+Paginate/batch according to the existing Bright Data implementation and account limits.
+
+Do NOT invent dataset IDs.
+
+==================================================
+10. SEARCH DATABASE SHOULD BECOME USEFUL
+==================================================
+
+The system should accumulate a useful pool of recent tech jobs.
+
+v!viewall must show stored active jobs up to 90 days.
+
+Sort:
+
+1. newest/reposted
+2. match score
+3. source quality
+
+Add useful filtering/pagination.
+
+Do not route v!viewall through v!search.
+
+==================================================
+11. v!search
+==================================================
+
+A manual search should search both:
+
+stored jobs
++
+targeted live discovery
+
+For:
+
+v!search software engineer
+
+return software-family roles first.
+
+For:
+
+v!search developer
+
+return development roles first.
+
+Do not suggest Infrastructure Developer as the first result for a software query unless there are genuinely no software-family jobs.
+
+==================================================
+12. APPLICATION ELIGIBILITY
+==================================================
+
+Jobs up to 90 days old are allowed to be APPLICATION-ELIGIBLE if:
+
+- listing is still active
+- role is computer/IT related
+- location is PH / Remote PH where required
+- seniority is not clearly inappropriate
+- URL is valid
+
+Do NOT automatically reject a job merely because it is 31–90 days old.
+
+However:
+
+DO NOT blindly auto-submit applications to hundreds of employers.
+
+Keep the existing review/confirmation safety.
+
+APPLY NOW
+→ application review
+→ cover letter/resume
+→ confirmation
+→ send only through the existing verified application path.
+
+Portal-only jobs remain portal/manual.
+
+==================================================
+13. SENIORITY
+==================================================
+
+Still suppress obviously inappropriate:
+
+Senior
+Sr.
+Lead
+Staff
+Principal
+Architect
+Manager
+Head
+
+and strong 4+/5+ year requirements.
+
+Do not give them 100% simply because keywords match.
+
+Broad computer-related discovery does NOT mean senior jobs become ideal matches.
+
+==================================================
+14. REAL COUNTERS
+==================================================
+
+Expose real scan totals:
+
+Sources attempted
+Sources successful
+Pages/batches fetched
+Raw jobs discovered
+Normalized jobs
+0–90 day jobs
+Computer-related jobs
+Entry-level-compatible jobs
+Duplicates removed
+New database records
+Qualifying alerts
+
+I want to see whether BULK discovery is actually happening.
+
+==================================================
+15. PRODUCTION TEST
+==================================================
+
+After fixing:
+
+run full tests
+
+then start real application
+
+then test:
+
+Browserless → JobStreet login page
+
+v!viewall production data path
+
+software search
+
+developer search
+
+full scan
+
+Then push NORMAL to origin/main.
+
+Wait for Render deployment.
+
+Verify:
+
+/health
+Discord
+Database
+Scheduler
+
+==================================================
+16. NO FAKE PASS
+==================================================
+
+Do NOT report PASS unless actually exercised.
+
+For JobStreet, acceptable production result before I personally log in is:
+
+BROWSERLESS: PASS
+JOBSTREET LOGIN PAGE: PASS
+LIVE BROWSER: PASS
+STATUS: WAITING FOR USER LOGIN
+
+Then I can finish authentication myself.
+
+==================================================
+17. TESTS + PUSH
+==================================================
+
+Run:
+
+pytest -q
+python -m compileall -q src
+git diff --check
+
+Update:
+
+README.md
+docs/PROJECT_CHECKPOINT.md
+
+Use:
+
+Mark Andrei Castillo
+99703880+draiimon@users.noreply.github.com
+
+Commit legitimate source files only.
+
+NORMAL PUSH origin/main.
+
+No force push.
+
+==================================================
+FINAL RESPONSE ONLY
+==================================================
+
+APPLICATION STARTUP: PASS/FAIL
+
+JOBSTREET CONNECT:
+PASS/FAIL
+
+DISCORD TIMEOUT:
+FIXED/NOT FIXED
+
+SIGNED LINK:
+PASS/FAIL
+
+BROWSERLESS:
+PASS/FAIL
+
+JOBSTREET PAGE NAVIGATION:
+PASS/FAIL
+
+LIVE INTERACTIVE BROWSER:
+PASS/FAIL
+
+JOBSTREET STATUS:
+READY / WAITING FOR USER LOGIN / FAIL
+
+DISCOVERY WINDOW:
+[number] days
+
+PUBLIC ATS:
+[number configured / number working]
+
+LINKEDIN:
+READY/DISABLED
+
+JOBSTREET:
+READY/AUTH REQUIRED
+
+RAW JOBS DISCOVERED:
+[number]
+
+0-90 DAY JOBS:
+[number]
+
+COMPUTER-RELATED JOBS:
+[number]
+
+ENTRY-LEVEL COMPATIBLE:
+[number]
+
+DUPLICATES REMOVED:
+[number]
+
+DATABASE JOBS:
+[number]
+
+VIEWALL:
+PASS/FAIL
+
+VIEWALL JOB COUNT:
+[number]
+
+SOFTWARE SEARCH:
+PASS/FAIL
+
+DEVELOPER SEARCH:
+PASS/FAIL
+
+APPLICATION ELIGIBILITY 0-90 DAYS:
+PASS/FAIL
+
+SENIORITY SAFETY:
+PASS/FAIL
+
+15-MIN SCANNER:
+PASS/FAIL
+
+TESTS:
+X passed / X failed
+
+FINAL COMMIT:
+[hash]
+
+GITHUB PUSH:
+PASS/FAIL
+
+RENDER DEPLOY:
+PASS/FAIL
+
+REMAINING MANUAL STEP:
+[ONLY my JobStreet/Google login, or NONE]

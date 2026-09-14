@@ -38,7 +38,14 @@ class Repository:
                 pool_use_lifo=True,
             )
         self.engine=create_engine(url,connect_args=connect_args,**engine_options); self.sessions=sessionmaker(self.engine,expire_on_commit=False)
-    def create_schema(self): Base.metadata.create_all(self.engine)
+    def create_schema(self):
+        Base.metadata.create_all(self.engine)
+        # create_all does not alter an existing column.  This is a safe,
+        # widening-only migration for databases created before scan counters
+        # were persisted in the scheduler snapshot.
+        if self.engine.dialect.name == 'postgresql':
+            with self.engine.begin() as connection:
+                connection.execute(text('ALTER TABLE app_state ALTER COLUMN value TYPE TEXT'))
     def initialize_runtime_config(self, cfg: Settings) -> dict[str, str]:
         """Create/load safe runtime settings and hydrate the process config.
 
@@ -53,8 +60,9 @@ class Repository:
             'jobstreet_base_url': 'https://ph.jobstreet.com',
             'jobstreet_login_url': '',
             'jobstreet_location': 'Philippines',
-            'jobstreet_search_terms_json': '["DevOps", "Cloud", "IT Support"]',
+            'jobstreet_search_terms_json': '["software", "developer", "IT support", "technical support", "DevOps", "cloud", "infrastructure", "systems", "network", "QA", "cybersecurity", "application support"]',
             'jobstreet_max_results': '50',
+            'jobstreet_max_pages': '5',
             'jobstreet_auth_timeout_seconds': '600',
             'jobstreet_scan_timeout_seconds': '60',
             'jobstreet_last_verified': '',
@@ -85,6 +93,7 @@ class Repository:
                 setattr(cfg, key, value)
         for key in (
             'jobstreet_max_results',
+            'jobstreet_max_pages',
             'jobstreet_auth_timeout_seconds',
             'jobstreet_scan_timeout_seconds',
         ):
@@ -412,7 +421,10 @@ class Pipeline:
         if not is_ph_location(item) or not is_active_listing(item): return None, False
         score,reasons,warnings,relevant=evaluate(item)
         _,_,fresh=freshness(item)
-        if not relevant or not fresh or (freshness(item)[0] < 0 and score < 85): return None, False
+        # Jobs remain eligible throughout the 90-day window when the listing
+        # is active and the role is technically relevant.  Freshness affects
+        # ranking and alerts, but age alone must not discard a 31–90 day job.
+        if not relevant or not fresh: return None, False
         job=await asyncio.to_thread(self.repo.save,item,score,reasons,warnings)
         if not job: return None, True
         if notify and score>=self.config.min_notify_score: await self.notify(job)
@@ -458,12 +470,36 @@ class Pipeline:
         return len(ids)
     async def run_source(self,source):
         run=await asyncio.to_thread(self.repo.run_start,source.name); discovered=new=filtered=0
+        pages_fetched=0
+        raw_jobs_discovered=normalized_jobs=jobs_0_90=computer_related=entry_level_compatible=duplicates_removed=0
+        succeeded=False
         try:
             for attempt in range(3):
                 try: items=await source.fetch(); break
                 except Exception:
                     if attempt==2: raise
                     await asyncio.sleep(2**attempt)
+            pages_fetched=int(getattr(source,'pages_fetched',1) or 1)
+            raw_jobs_discovered=len(items); normalized_jobs=len(items)
+            now=datetime.now(timezone.utc)
+            for item in items:
+                if is_active_listing(item):
+                    _,_,in_window=freshness(item,now)
+                    if in_window:
+                        jobs_0_90 += 1
+                    score,_,warnings,relevant=evaluate(item,now)
+                    if relevant:
+                        computer_related += 1
+                        if not any(
+                            warning.startswith('Senior-level') or warning.startswith('Requires')
+                            for warning in warnings
+                        ) and score >= 0:
+                            entry_level_compatible += 1
+            seen_fingerprints=set()
+            for item in items:
+                if item.fingerprint in seen_fingerprints:
+                    duplicates_removed += 1
+                seen_fingerprints.add(item.fingerprint)
             health=await asyncio.to_thread(self.repo.health,source.name)
             baseline=not health.baseline_initialized
             ordered=sorted(items,key=lambda x:evaluate(x)[0],reverse=True)
@@ -479,7 +515,14 @@ class Pipeline:
                     await self.notify(job)
             await asyncio.to_thread(self.repo.run_finish,run,success=True,discovered=discovered,new_jobs=new,filtered=filtered)
             await asyncio.to_thread(self.repo.health_success,source.name,discovered,baseline=True)
+            succeeded=True
         except Exception as e:
             await asyncio.to_thread(self.repo.run_finish,run,success=False,error=str(e)); log.warning('source_failed',extra={'source':source.name,'error':str(e)})
             await asyncio.to_thread(self.repo.health_failure,source.name,str(e))
-        return {'source':source.name,'discovered':discovered,'new':new,'filtered':filtered}
+        return {
+            'source':source.name,'discovered':discovered,'new':new,'filtered':filtered,
+            'success': succeeded,'pages_fetched':pages_fetched,'raw_jobs_discovered':raw_jobs_discovered,
+            'normalized_jobs':normalized_jobs,'jobs_0_90':jobs_0_90,
+            'computer_related':computer_related,'entry_level_compatible':entry_level_compatible,
+            'duplicates_removed':duplicates_removed,
+        }

@@ -179,7 +179,7 @@ async def authenticate_jobstreet(cfg: Settings | None = None) -> Path:
     target = session_path(cfg)
     target.parent.mkdir(parents=True, exist_ok=True)
     os.chmod(target.parent, 0o700)
-    login_url = cfg.jobstreet_login_url or f"{cfg.jobstreet_base_url.rstrip('/')}/login"
+    login_url = cfg.jobstreet_login_url or f"{cfg.jobstreet_base_url.rstrip('/')}/oauth/login"
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=False)
@@ -326,6 +326,7 @@ class JobStreetBrowserSource(Source):
         self.cfg = cfg
         self.repo = repo
         self.name = JOBSTREET_SOURCE_NAME
+        self.pages_fetched = 0
 
     async def fetch(self) -> list[NormalizedJob]:
         runtime_state = session_path(self.cfg).with_name("jobstreet_runtime_session.json")
@@ -347,19 +348,29 @@ class JobStreetBrowserSource(Source):
                 page = await context.new_page()
                 try:
                     for term in self.cfg.jobstreet_search_terms:
-                        url = (
-                            f"{self.cfg.jobstreet_base_url.rstrip('/')}/jobs"
-                            f"?keywords={quote_plus(term)}&location={quote_plus(self.cfg.jobstreet_location)}"
-                        )
-                        await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-                        if not await _is_authenticated(page):
-                            raise JobStreetAuthRequired("AUTH REQUIRED")
-                        for row in await _visible_listing_rows(page):
-                            job = _normalize_listing(row)
-                            if job and all(existing.url != job.url for existing in jobs):
-                                jobs.append(job)
-                                if len(jobs) >= self.cfg.jobstreet_max_results:
-                                    break
+                        for page_number in range(1, max(1, int(self.cfg.jobstreet_max_pages)) + 1):
+                            if len(jobs) >= self.cfg.jobstreet_max_results:
+                                break
+                            url = (
+                                f"{self.cfg.jobstreet_base_url.rstrip('/')}/jobs"
+                                f"?keywords={quote_plus(term)}&location={quote_plus(self.cfg.jobstreet_location)}"
+                                f"&page={page_number}"
+                            )
+                            await page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                            self.pages_fetched += 1
+                            if not await _is_authenticated(page):
+                                raise JobStreetAuthRequired("AUTH REQUIRED")
+                            before = len(jobs)
+                            for row in await _visible_listing_rows(page):
+                                job = _normalize_listing(row)
+                                if job and all(existing.url != job.url for existing in jobs):
+                                    jobs.append(job)
+                                    if len(jobs) >= self.cfg.jobstreet_max_results:
+                                        break
+                            # A page with no new visible listings is the
+                            # provider's practical end for this query.
+                            if len(jobs) == before:
+                                break
                         if len(jobs) >= self.cfg.jobstreet_max_results:
                             break
                 finally:

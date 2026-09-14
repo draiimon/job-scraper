@@ -1,0 +1,638 @@
+FINAL PRODUCT QUALITY PASS — MAKE THE SYSTEM ACTUALLY USEFUL.
+
+I want the entire job hunter to work as a real daily-use product, not just pass tests.
+
+PRIMARY GOAL:
+
+Deliver a useful stream of legitimate computer/IT-related jobs every day.
+
+TARGET:
+Aim for around 30 useful jobs per day when enough legitimate listings exist.
+
+IMPORTANT:
+Do NOT manufacture volume.
+Do NOT lower quality just to hit 30.
+Do NOT duplicate jobs.
+Do NOT include obviously irrelevant/senior/unusable roles.
+
+If only 12 strong legitimate jobs exist, return 12.
+If 40 good jobs exist, allow more than 30.
+
+QUALITY > artificial quota.
+
+==================================================
+1. EVERYTHING MUST WORK TOGETHER
+==================================================
+
+Verify all major features end-to-end:
+
+- automatic startup scan
+- automatic 900-second / 15-minute scans
+- public ATS sources
+- LinkedIn when READY
+- JobStreet when READY
+- v!search
+- v!latest
+- v!viewall
+- v!view all
+- v!status
+- v!scan
+- v!jobstreet
+- persistent control panel
+- role alert ping
+- save
+- skip
+- apply workflow
+- cover-letter generation
+- TXT/PDF output
+- application confirmation
+- dry-run safety
+- Supabase persistence
+- deduplication
+- repost handling
+- restart recovery
+
+No feature should silently fail.
+
+==================================================
+2. DAILY JOB VOLUME TARGET
+==================================================
+
+Aim for a healthy discovery pool capable of producing approximately:
+
+~30 useful jobs/day
+
+when legitimate supply exists.
+
+Use broad computer-related categories:
+
+DevOps
+Cloud
+Infrastructure
+Platform
+SRE
+Linux
+Systems
+Server Administration
+Network
+NOC
+IT Support
+Technical Support
+Help Desk
+Service Desk
+Application Support
+IT Operations
+Systems Analyst
+Software Engineer
+Software Developer
+Backend
+Frontend
+Full Stack
+Web Development
+Python
+Java
+PHP
+Node.js
+QA
+Software Testing
+Automation QA
+Cloud Support
+Cybersecurity
+SOC
+Database / technical data roles
+other legitimate computer-related entry-level roles
+
+Exclude unrelated:
+Accounting
+Finance
+HR
+Sales
+Marketing
+generic VA
+generic nontechnical customer service
+non-computer engineering
+unrelated jobs
+
+==================================================
+3. 90-DAY DISCOVERY WINDOW
+==================================================
+
+Use up to the past 90 days.
+
+Priority:
+
+0–1 day = highest
+2–7 days = very high
+8–14 days = high
+15–30 days = normal
+31–60 days = lower
+61–90 days = lowest but eligible
+
+>90 days:
+normally skip unless clearly reposted/reactivated.
+
+Do NOT call old jobs "new."
+
+Always preserve real posting age.
+
+==================================================
+4. ACTIVE JOB VALIDATION
+==================================================
+
+Where practical, verify that older 31–90 day listings are still active.
+
+Do not keep dead/removed job URLs in active result pools.
+
+If a source clearly reports closed/expired:
+exclude it.
+
+==================================================
+5. BULK SOURCE DISCOVERY
+==================================================
+
+Do not fetch only tiny samples.
+
+For all READY sources:
+
+- paginate where supported
+- batch multiple relevant queries
+- continue until:
+  - no more results
+  - 90-day cutoff reached
+  - safe rate/source limit reached
+
+Use safe concurrency and rate limiting.
+
+Do NOT hammer sites.
+
+==================================================
+6. PUBLIC ATS MUST REMAIN THE BACKBONE
+==================================================
+
+Public ATS/company sources must work independently.
+
+Use:
+config/job_sources.json
+or valid SOURCE_TARGETS_JSON override.
+
+LinkedIn and JobStreet are additional sources.
+
+If LinkedIn fails:
+ATS + JobStreet continue.
+
+If JobStreet fails:
+ATS + LinkedIn continue.
+
+If one ATS fails:
+other sources continue.
+
+==================================================
+7. LINKEDIN
+==================================================
+
+When READY:
+
+use broad tech search families, not only DevOps/Cloud/IT Support.
+
+Use legitimate Bright Data configuration only.
+
+Batch/paginate within account/source limits.
+
+Do not duplicate LinkedIn results already found from ATS/company sources.
+
+==================================================
+8. JOBSTREET
+==================================================
+
+Make the full flow work:
+
+v!jobstreet
+→ CONNECT JOBSTREET
+→ immediate Discord ACK
+→ private signed link
+→ Browserless live browser
+→ automatically navigate to JobStreet login
+→ user manually completes Google login / 2FA / CAPTCHA
+→ authenticated session verified
+→ encrypted session saved
+→ JobStreet READY
+→ participates in automatic scans and v!search
+
+No interaction timeout.
+
+No useless dead setup page.
+
+If authentication is not completed yet, the only acceptable status is:
+
+WAITING FOR USER LOGIN
+
+==================================================
+9. v!viewall MUST BE USEFUL
+==================================================
+
+Both:
+
+v!viewall
+v!view all
+
+must show real stored jobs.
+
+Flow:
+
+Loading stored jobs...
+→ same message edits into paginated board
+
+Sort:
+
+newest/reposted first
+then match score
+then source quality
+
+Show enough context:
+
+title
+company
+location
+source
+posting age
+match score
+
+Pagination must work.
+
+Do NOT route viewall into search.
+
+==================================================
+10. v!search MUST BE RELEVANT
+==================================================
+
+Manual search:
+
+stored jobs
++
+targeted live discovery
+
+Query relevance must come BEFORE generic profile score.
+
+Example:
+
+v!search software engineer
+
+should prioritize:
+Software Engineer
+Software Developer
+Junior Developer
+Backend
+Frontend
+Full Stack
+Application Developer
+Web Developer
+
+Do not show Infrastructure Developer as the first fallback if software-family jobs exist.
+
+==================================================
+11. SEARCH COUNTERS
+==================================================
+
+Show real counters:
+
+Sources checked
+Jobs reviewed
+Recent 0–90 day jobs
+Query-relevant jobs
+Entry-level-compatible jobs
+Qualifying matches
+
+No fake numbers.
+
+==================================================
+12. SCORING QUALITY
+==================================================
+
+Do not give 100% too easily.
+
+100% should be rare.
+
+Strong senior signals must reduce/cap match:
+
+Senior
+Sr.
+Lead
+Staff
+Principal
+Architect
+Manager
+Head
+4+ years
+5+ years
+etc.
+
+A role should not become perfect match only because it contains:
+AWS
+Docker
+Terraform
+Python
+etc.
+
+==================================================
+13. ALERT QUALITY
+==================================================
+
+Send automatic alerts only for legitimate qualifying jobs.
+
+Role ping:
+
+<@&1346328166100107366>
+
+Exactly once per new qualifying alert.
+
+No duplicate pings.
+
+No role ping for:
+manual search
+status
+help
+preview
+viewall
+
+==================================================
+14. DAILY VOLUME CONTROL
+==================================================
+
+Do NOT hard-cap discovery at 3 alerts per scan if that prevents useful volume.
+
+Instead use sensible anti-spam logic.
+
+Goal:
+roughly up to ~30 useful alerts/day when enough good jobs exist.
+
+Example:
+
+- dedup across entire day
+- avoid sending 20 cards at exactly the same second
+- allow batching / spaced delivery
+- prioritize newest/highest-quality roles
+- retain overflow in v!latest / v!viewall
+
+Do NOT permanently discard valid jobs just because a per-cycle alert cap was reached.
+
+==================================================
+15. DATABASE
+==================================================
+
+Persist:
+
+jobs
+source IDs
+fingerprints
+posting/repost timestamps
+source health
+notification state
+saved/skipped
+applications
+JobStreet connection
+control panel ID
+
+Restart must not resend old jobs as new.
+
+==================================================
+16. COVER LETTER + APPLICATION
+==================================================
+
+Make sure:
+
+- simple natural English
+- no overly corporate AI language
+- role-tailored
+- factual only
+- contact header correct
+- copyable Discord preview
+- TXT
+- PDF
+- same canonical validated text
+
+Application review must work.
+
+Keep dry-run ON for verification.
+
+No real employer contact during testing.
+
+==================================================
+17. DISCORD UI
+==================================================
+
+Use the master reference styling:
+
+Channel:
+1346038098802249798
+
+Message:
+1346058363556986963
+
+Use:
+#FF7F00
+clean hierarchy
+mobile-readable layout
+consistent footer
+
+Footer:
+After Hours Job Hunter • Made by masoncalix
+
+No:
+svg
+[image](...)
+raw avatar URLs
+broken markdown
+\@
+\.
+debug artifacts
+
+==================================================
+18. REAL END-TO-END TESTING
+==================================================
+
+Do NOT rely only on unit tests.
+
+Actually run the app.
+
+Verify:
+
+- database connected
+- Discord gateway connected
+- scheduler running
+- startup scan
+- second scheduled 15-minute cycle
+- public ATS fetch
+- LinkedIn if READY
+- JobStreet Browserless navigation
+- viewall database board
+- software search
+- developer search
+- status
+- role-alert pipeline
+- control panel
+- restart behavior
+
+You cannot complete my Google credentials yourself.
+
+For JobStreet, stop only at:
+
+WAITING FOR USER LOGIN
+
+after proving the live browser opened correctly.
+
+==================================================
+19. USEFULNESS METRICS
+==================================================
+
+Report actual counts:
+
+RAW JOBS DISCOVERED
+0–90 DAY JOBS
+ACTIVE JOBS
+COMPUTER-RELATED JOBS
+ENTRY-LEVEL-COMPATIBLE JOBS
+DUPLICATES REMOVED
+DATABASE ACTIVE JOBS
+NEW JOBS TODAY
+ALERTS TODAY
+
+Estimate whether current source coverage can reasonably support the ~30 useful jobs/day target.
+
+Do not fake the estimate.
+
+==================================================
+20. FIX WHATEVER IS ACTUALLY BROKEN
+==================================================
+
+If a feature fails during live testing:
+
+fix it.
+
+Then rerun:
+
+pytest -q
+python -m compileall -q src
+git diff --check
+
+All tests must pass.
+
+==================================================
+21. DOCUMENTATION + DEPLOYMENT
+==================================================
+
+Update:
+
+README.md
+docs/PROJECT_CHECKPOINT.md
+
+Document actual final behavior.
+
+Commit as:
+
+Mark Andrei Castillo
+99703880+draiimon@users.noreply.github.com
+
+NORMAL push to origin/main.
+
+Wait for Render deployment.
+
+Verify /health and production Discord after deploy.
+
+No force push.
+
+==================================================
+FINAL RESPONSE ONLY
+==================================================
+
+PRODUCTION READY:
+YES/NO
+
+TESTS:
+X passed / X failed
+
+DISCORD:
+PASS/FAIL
+
+DATABASE:
+PASS/FAIL
+
+15-MIN SCANNER:
+PASS/FAIL
+
+PUBLIC ATS:
+[number working / configured]
+
+LINKEDIN:
+READY/DISABLED/FAIL
+
+JOBSTREET:
+READY / WAITING FOR USER LOGIN / FAIL
+
+JOBSTREET LIVE BROWSER:
+PASS/FAIL
+
+VIEWALL:
+PASS/FAIL
+
+VIEWALL ACTIVE JOBS:
+[number]
+
+SOFTWARE SEARCH:
+PASS/FAIL
+
+DEVELOPER SEARCH:
+PASS/FAIL
+
+RAW JOBS DISCOVERED:
+[number]
+
+0-90 DAY JOBS:
+[number]
+
+ACTIVE COMPUTER JOBS:
+[number]
+
+ENTRY-LEVEL COMPATIBLE:
+[number]
+
+DUPLICATES REMOVED:
+[number]
+
+NEW JOBS TODAY:
+[number]
+
+ALERTS TODAY:
+[number]
+
+~30 USEFUL JOBS/DAY TARGET:
+REALISTIC / PARTIALLY REALISTIC / NOT CURRENTLY REALISTIC
+
+ROLE ALERT PING:
+PASS/FAIL
+
+COVER LETTER:
+PASS/FAIL
+
+APPLICATION FLOW:
+PASS/FAIL
+
+CONTROL PANEL:
+PASS/FAIL
+
+RESTART/DEDUP:
+PASS/FAIL
+
+FINAL COMMIT:
+[hash]
+
+GITHUB PUSH:
+PASS/FAIL
+
+RENDER DEPLOY:
+PASS/FAIL
+
+REMAINING MANUAL STEP:
+[exact step or NONE]
+
+FINAL VERDICT:
+Explain in 3–5 lines whether this system is now genuinely useful for daily job hunting and what, if anything, still limits it.

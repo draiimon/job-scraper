@@ -36,9 +36,11 @@ def test_location_filter():
     assert not is_ph_location(job(location='New York, United States'))
     assert not is_ph_location(job(location='Remote — worldwide'))
 
-def test_stale_jobs_never_pass_freshness_gate():
+def test_ninety_day_freshness_window_is_inclusive():
     points,reason,active=freshness(job(date_posted=datetime.now(timezone.utc)-timedelta(days=31)))
-    assert not active and points == -100 and 'Stale' in reason
+    assert active and points == -5 and '31–60' in reason
+    points,reason,active=freshness(job(date_posted=datetime.now(timezone.utc)-timedelta(days=91)))
+    assert not active and points == -100 and '90 days' in reason
 
 def test_broad_technology_role_is_eligible_but_senior_is_not():
     support=job(title='IT Support Specialist',description='Fresh graduate opportunity supporting Windows, Linux, networks, and technical users.')

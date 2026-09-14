@@ -53,11 +53,44 @@ class ManualJobSearch:
         text = (freshness_text or "Past 24 hours").lower()
         if "24" in text:
             return 1
+        if "90" in text:
+            return 90
+        if "60" in text:
+            return 60
+        if "30" in text:
+            return 30
         if "14" in text:
             return 14
         if "7" in text or "week" in text:
             return 7
         return 3
+
+    @staticmethod
+    def _family_rank(item: NormalizedJob, role: str) -> int:
+        """Prefer the requested computer-role family over broad keyword hits."""
+        title = item.title.lower()
+        query = role.lower()
+        software_family = (
+            "software", "developer", "development", "backend", "frontend",
+            "full stack", "fullstack", "web developer", "python developer",
+            "java developer", "php developer", "node.js developer",
+        )
+        infrastructure_family = (
+            "infrastructure", "devops", "cloud", "platform", "sre",
+            "systems", "network", "linux", "noc",
+        )
+        support_family = ("support", "help desk", "service desk", "application support")
+        if any(term in query for term in ("software", "developer", "backend", "frontend", "full stack")):
+            if any(term in title for term in software_family) and not any(term in title for term in infrastructure_family):
+                return 0
+            if any(term in title for term in software_family):
+                return 1
+            return 2
+        if "support" in query or "help desk" in query or "service desk" in query:
+            return 0 if any(term in title for term in support_family) else 1
+        if any(term in query for term in infrastructure_family):
+            return 0 if any(term in title for term in infrastructure_family) else 1
+        return 0
 
     @staticmethod
     def _query_terms(role: str) -> set[str]:
@@ -180,6 +213,34 @@ class ManualJobSearch:
                 if stored:
                     accepted[stored.fingerprint] = stored
 
+        # Search starts with the accumulated database pool, then adds a
+        # targeted live pass. This makes a search useful even when one live
+        # source is slow while still allowing newly posted jobs to appear.
+        def load_stored() -> list[NormalizedJob]:
+            from .models import Job, JobStatus
+            with self.repo.sessions() as session:
+                rows = session.scalars(
+                    select(Job).where(
+                        Job.status != JobStatus.EXPIRED.value,
+                        Job.date_posted.is_not(None),
+                        Job.date_posted >= cutoff,
+                    ).order_by(Job.date_posted.desc()).limit(500)
+                ).all()
+            return [
+                NormalizedJob(
+                    source=row.source, source_job_id=row.source_job_id, title=row.title,
+                    company=row.company, location=row.location, work_setup=row.work_setup,
+                    description=row.description, url=row.url,
+                    application_url=row.application_url, application_email=row.application_email,
+                    salary=row.salary, date_posted=row.date_posted,
+                    employment_type=row.employment_type, seniority=row.seniority,
+                    skills=row.skills or [], raw_metadata=row.raw_metadata or {},
+                )
+                for row in rows
+            ]
+
+        await consume(await asyncio.to_thread(load_stored))
+
         # ATS sources are the reliable base and remain available without Bright Data.
         source_filter = source_filter.lower()
         # Manual searches are targeted and bounded. The 15-minute scheduler is
@@ -234,7 +295,14 @@ class ManualJobSearch:
                 await self._emit(progress_callback, progress)
 
         await asyncio.gather(ats_task, fetch_linkedin())
-        jobs = sorted(accepted.values(), key=lambda job: job.date_posted or datetime.min.replace(tzinfo=timezone.utc), reverse=True)[:limit]
+        jobs = sorted(
+            accepted.values(),
+            key=lambda job: (
+                self._family_rank(job, role),
+                -(job.score or 0),
+                -(job.date_posted.timestamp() if job.date_posted else 0),
+            ),
+        )[:limit]
         outcome = SearchOutcome(jobs, progress, time.monotonic() - started, errors=errors)
         self.cache[key] = (time.time() + 300, outcome)
         return outcome

@@ -72,12 +72,30 @@ async def poll_once(manual=False):
                 try: return await asyncio.wait_for(pipeline.run_source(source),timeout=timeout)
                 except asyncio.TimeoutError:
                     repo.health_failure(source.name,'scan source timeout')
-                    return {'source':source.name,'discovered':0,'new':0,'filtered':0,'timeout':True}
+                    return {'source':source.name,'discovered':0,'new':0,'filtered':0,'timeout':True,'success':False,'pages_fetched':0}
         outcomes=await asyncio.gather(*(limited(source) for source in sources))
         await pipeline.retry_notifications()
         finished=datetime.now(timezone.utc)
-        checked=sum(x['discovered'] for x in outcomes); new=sum(x['new'] for x in outcomes); filtered=sum(x['filtered'] for x in outcomes)
-        state={'status':'running','phase':'complete','last_poll_at':iso(finished),'next_poll_at':scheduled_next if manual else iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':pipeline._cycle_notifications,'duplicates_ignored':max(0,checked-new-filtered),'sources_loaded':len(sources)}
+        checked=sum(x.get('discovered',0) for x in outcomes)
+        new=sum(x.get('new',0) for x in outcomes)
+        filtered=sum(x.get('filtered',0) for x in outcomes)
+        state={
+            'status':'running','phase':'complete','last_poll_at':iso(finished),
+            'next_poll_at':scheduled_next if manual else iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),
+            'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':pipeline._cycle_notifications,
+            'duplicates_ignored':sum(x.get('duplicates_removed',0) for x in outcomes),
+            'sources_loaded':len(sources),
+            'sources_attempted':len(sources),
+            'sources_successful':sum(1 for x in outcomes if x.get('success')),
+            'pages_fetched':sum(x.get('pages_fetched',0) for x in outcomes),
+            'raw_jobs_discovered':sum(x.get('raw_jobs_discovered',x.get('discovered',0)) for x in outcomes),
+            'normalized_jobs':sum(x.get('normalized_jobs',0) for x in outcomes),
+            'jobs_0_90':sum(x.get('jobs_0_90',0) for x in outcomes),
+            'computer_related_jobs':sum(x.get('computer_related',0) for x in outcomes),
+            'entry_level_compatible':sum(x.get('entry_level_compatible',0) for x in outcomes),
+            'new_database_records':new,
+            'qualifying_alerts':pipeline._cycle_notifications,
+        }
         # status update is best-effort: a webhook outage never stops polling.
         state.update({'sources_working':sum(1 for source in sources if repo.health(source.name).status=='healthy'),'linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg)})
         repo.set_state('scheduler',state)
@@ -167,18 +185,30 @@ def _jobstreet_complete_page(message: str) -> str:
         '<p>You can close this tab and return to Discord.</p></main>'
     )
 
-def _jobstreet_live_page(token: str, live_url: str, status: str, error: str | None = None) -> str:
+def _jobstreet_live_page(token: str, live_url: str, status: str, error: str | None = None, auto_redirect: bool = False) -> str:
     if status == "READY":
         return _jobstreet_complete_page("JobStreet is connected and ready.")
     if status == "ERROR":
         return _jobstreet_complete_page(error or "The private browser session did not complete.")
+    redirect = (
+        f'<meta http-equiv="refresh" content="0;url={escape(live_url, quote=True)}">'
+        f'<script>window.location.replace({json.dumps(live_url)});</script>'
+        if auto_redirect and live_url else ''
+    )
+    handoff = (
+        '<p>Redirecting to the live private browser now. If it does not open, '
+        f'<a href="{escape(live_url, quote=True)}" target="_blank" rel="noopener noreferrer">open it here</a>.</p>'
+        if auto_redirect and live_url
+        else '<p><a href="' + escape(live_url, quote=True) + '" target="_blank" rel="noopener noreferrer">OPEN PRIVATE BROWSER</a></p>'
+    )
     return (
         '<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1">'
+        + redirect +
         '<title>Connect JobStreet</title><main style="max-width:42rem;margin:3rem auto;font:16px system-ui;color:#222">'
-        '<h1>Connect JobStreet</h1><p>Open the private browser below and complete JobStreet authentication manually.</p>'
+        '<h1>Connect JobStreet</h1><p>Complete JobStreet authentication in the private browser.</p>'
         '<p>Use Continue with Google, and complete any 2FA, security prompts, consent, or CAPTCHA yourself. '
         'The service never receives your Google password or challenge answers.</p>'
-        f'<p><a href="{escape(live_url, quote=True)}" target="_blank" rel="noopener noreferrer">OPEN PRIVATE BROWSER</a></p>'
+        + handoff +
         '<p>When authentication is complete, close the Browserless browser tab. This page will update automatically.</p>'
         f'<p id="status">Status: {escape(status)}</p>'
         f'''<script>
@@ -208,7 +238,7 @@ async def start_jobstreet_connection(token: str):
     session = await start_interactive_session(cfg, repo, request)
     if session.status == "ERROR":
         return HTMLResponse(_jobstreet_complete_page(session.error or "The private browser session did not complete."), status_code=502)
-    return HTMLResponse(_jobstreet_live_page(token, session.live_url or "", session.status, session.error))
+    return HTMLResponse(_jobstreet_live_page(token, session.live_url or "", session.status, session.error, auto_redirect=True))
 
 @app.get('/connect/jobstreet/{token}/status')
 def jobstreet_connection_status(token: str):
