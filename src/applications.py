@@ -323,7 +323,8 @@ def _project_paragraph(job_text: str, resume_text: str | None) -> str:
 
 
 def _current_date() -> str:
-    return datetime.now(ZoneInfo("Asia/Manila")).strftime("%B %-d, %Y")
+    now=datetime.now(ZoneInfo("Asia/Manila"))
+    return f"{now.strftime('%B')} {now.day}, {now.year}"
 
 
 def cover_letter(job: Job, resume_text: str | None = None) -> str:
