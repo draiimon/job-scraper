@@ -332,9 +332,27 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.response.defer()
             self.page=min(self.total_pages-1,self.page+1); await self.render(interaction.message)
     async def send_view_all(destination, ephemeral=False):
-        jobs,total=await load_view_all_jobs(0)
-        embed,pages=view_all_embed(jobs,0,total)
-        return await destination.send(embed=embed,view=ViewAllJobsView(jobs,0,pages),ephemeral=ephemeral)
+        send_options={}
+        if ephemeral:
+            send_options['ephemeral']=True
+        loading=await destination.send(
+            embed=styled_embed('𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃','Loading stored matches…'),
+            **send_options,
+        )
+        try:
+            jobs,total=await load_view_all_jobs(0)
+            embed,pages=view_all_embed(jobs,0,total)
+            await loading.edit(embed=embed,view=ViewAllJobsView(jobs,0,pages))
+        except Exception as exc:
+            log.warning('discord_view_all_failed',extra={'error_type':type(exc).__name__})
+            await loading.edit(
+                embed=styled_embed(
+                    '𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃',
+                    'The stored job board is temporarily unavailable. Please try again in a moment.',
+                ),
+                view=None,
+            )
+        return loading
     async def execute_search(channel, user_id, role, location='Philippines', freshness='Past 24 hours', work_setup='', minimum_score=0, ephemeral=False, interaction=None):
         """One status card, real counters, then shared job cards. Never blocks heartbeat."""
         now=time.time()
