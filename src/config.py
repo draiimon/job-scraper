@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     app_timezone: str = "Asia/Manila"
     app_secret_key: str | None = None
     public_base_url: str | None = None
-    cover_letter_mode: str = "template"
+    cover_letter_mode: str = "ai"
     source_targets_json: str = ""
     source_config_path: str = "config/job_sources.json"
     google_client_id: str | None = None
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     profile_path: str = "data/master-profile.json"
     resume_path: str | None = None
     application_dry_run: bool = True
-    ai_enabled: bool = False
+    ai_enabled: bool = True
     ai_provider: str | None = None
     ai_api_key: str | None = None
     ai_model: str | None = None
@@ -50,6 +50,8 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-3.8-flash"
     gemini_max_retries: int = 3
     gemini_concurrency_limit: int = 2
+    gemini_request_timeout_seconds: int = 15
+    gemini_total_timeout_seconds: int = 45
     brightdata_enabled: bool = False
     brightdata_api_token: str | None = None
     # Bright Data's documented LinkedIn keyword-discovery dataset. It is only

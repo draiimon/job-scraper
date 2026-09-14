@@ -36,7 +36,11 @@ class GeminiManager:
         while not self._queue.empty():
             digest,prompt,future=await self._queue.get()
             try:
-                async with self._sem: answer=await self._request(prompt)
+                async with self._sem:
+                    answer=await asyncio.wait_for(
+                        self._request(prompt),
+                        timeout=max(1, self.cfg.gemini_total_timeout_seconds),
+                    )
                 if answer: self.cache[digest]=answer
                 if not future.done(): future.set_result(answer)
             except Exception:
@@ -78,7 +82,7 @@ class GeminiManager:
         url=f'https://generativelanguage.googleapis.com/v1beta/models/{self.cfg.gemini_model}:generateContent'
         try:
             self.requests_today+=1
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=max(1, self.cfg.gemini_request_timeout_seconds)) as client:
                 response=await client.post(url,headers={'x-goog-api-key':key.value},json={'contents':[{'parts':[{'text':prompt}]}]})
             if response.is_success:
                 text=response.json()['candidates'][0]['content']['parts'][0]['text']
