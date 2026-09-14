@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     discord_bot_token: str | None = None
     discord_bot_guild_id: str | None = None
     discord_control_channel_id: str | None = None
+    # Only this explicitly configured role may be pinged for a new real alert.
+    discord_alert_role_id: str | None = "1346328166100107366"
     discord_motivation: str = ""
     discord_motivations_json: str = ""
     min_notify_score: int = 70
@@ -61,6 +63,9 @@ class Settings(BaseSettings):
     brightdata_jobstreet_monthly_page_limit: int = 250
     brightdata_linkedin_monthly_request_limit: int = 100
     jobstreet_session_path: str = "data/private/jobstreet_session.json"
+    # Optional Render secret: base64-encoded Playwright storage state created
+    # locally through `python -m src.jobstreet_auth`. Never log this value.
+    jobstreet_session_state_b64: str | None = None
     jobstreet_base_url: str = "https://ph.jobstreet.com"
     jobstreet_login_url: str = ""
     jobstreet_location: str = "Philippines"

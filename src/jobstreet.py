@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -40,8 +41,37 @@ def has_storage_state(cfg: Settings) -> bool:
     )
 
 
+def ensure_storage_state(cfg: Settings) -> bool:
+    """Materialize an operator-provided Render secret into private temp storage.
+
+    The secret is never logged and the file remains outside source control. On
+    Render's ephemeral disk it is recreated from the secret after each restart.
+    """
+    if has_storage_state(cfg):
+        return True
+    encoded=(cfg.jobstreet_session_state_b64 or '').strip()
+    if not encoded:
+        return False
+    try:
+        raw=base64.b64decode(encoded,validate=True)
+        state=json.loads(raw.decode('utf-8'))
+        if not isinstance(state,dict) or not isinstance(state.get('cookies'),list) or not isinstance(state.get('origins',[]),list):
+            return False
+    except (ValueError,UnicodeDecodeError):
+        return False
+    target=session_path(cfg); target.parent.mkdir(parents=True,exist_ok=True)
+    try: os.chmod(target.parent,0o700)
+    except OSError: pass
+    try:
+        target.write_text(json.dumps(state,separators=(',',':')),encoding='utf-8')
+        os.chmod(target,0o600)
+    except OSError:
+        return False
+    return has_storage_state(cfg)
+
+
 def _auth_state(cfg: Settings, repo=None) -> str:
-    if not has_storage_state(cfg):
+    if not ensure_storage_state(cfg):
         return "AUTH REQUIRED"
     if repo is None:
         return "READY"
@@ -293,7 +323,7 @@ class JobStreetBrowserSource(Source):
         self.name = JOBSTREET_SOURCE_NAME
 
     async def fetch(self) -> list[NormalizedJob]:
-        if not has_storage_state(self.cfg):
+        if not ensure_storage_state(self.cfg):
             raise JobStreetAuthRequired("AUTH REQUIRED")
         try:
             from playwright.async_api import async_playwright
@@ -334,6 +364,6 @@ class JobStreetBrowserSource(Source):
 
 
 def jobstreet_sources(cfg: Settings, repo=None) -> list[Source]:
-    if not has_storage_state(cfg):
+    if not ensure_storage_state(cfg):
         return []
     return [JobStreetBrowserSource(cfg, repo)]

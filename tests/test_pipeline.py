@@ -121,13 +121,33 @@ def test_discord_alert_is_compact_and_has_real_link_buttons():
     record=Job(id=1,title='Junior Cloud Engineer',company='Cloud PH',location='Makati, Philippines',source='greenhouse:Cloud PH',description='',url='https://example.com/view',application_url='https://example.com/apply',score=87,match_reasons=['AWS','Docker'],warnings=[],work_setup='Hybrid',salary=None,date_posted=None)
     cfg=Settings(app_secret_key='test-secret',public_base_url='https://agent.example')
     payload=Discord(None,'Apply now!',cfg).payload(record)
-    assert payload['content'] == 'Apply now!'
+    assert payload['content'] == '<@&1346328166100107366>\n\nApply now!'
+    assert payload['allowed_mentions'] == {'parse':[], 'roles':['1346328166100107366']}
     assert payload['embeds'][0]['title'] == '𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇'
     assert '✅' not in payload['embeds'][0]['fields'][0]['value']
     assert payload['components'][0]['components'][0]['url'] == record.url
     assert any(x['label']=='APPLY NOW' and x['url'].startswith('https://agent.example/actions/') for x in payload['components'][0]['components'])
     assert sum(x['name']=='𝐖𝐀𝐍𝐓 𝐓𝐎 𝐅𝐈𝐍𝐃 𝐀 𝐒𝐏𝐄𝐂𝐈𝐅𝐈𝐂 𝐉𝐎𝐁?' for x in payload['embeds'][0]['fields']) == 1
     assert Discord(None,'',cfg).payload(record,test=True)['components'] == []
+
+def test_role_ping_is_only_for_a_real_alert_and_never_allows_everyone():
+    record=Job(id=2,title='IT Support Specialist',company='Cloud PH',location='Manila, Philippines',source='fixture',description='',url='https://example.com/view',score=70,match_reasons=[],warnings=[],raw_metadata={})
+    cfg=Settings(discord_alert_role_id='1346328166100107366')
+    real=Discord(None,'Headline',cfg).payload(record)
+    test=Discord(None,'Headline',cfg).payload(record,test=True)
+    assert '<@&1346328166100107366>' in real['content']
+    assert '<@&' not in test['content']
+    assert '@everyone' not in real['content'] and '@here' not in real['content']
+    assert real['allowed_mentions']['parse'] == []
+    assert real['allowed_mentions']['roles'] == ['1346328166100107366']
+
+def test_duplicate_bot_alert_claim_is_rejected(tmp_path):
+    repo=Repository(f'sqlite:///{tmp_path}/role-alert.db'); repo.create_schema()
+    stored=repo.save(job(),85,['AWS'],[])
+    with repo.sessions() as s:
+        s.get(Job,stored.id).notification_state='BOT_PENDING'; s.commit()
+    assert repo.claim_bot_alert(stored.id)
+    assert not repo.claim_bot_alert(stored.id)
 
 def test_signed_actions_expire_and_cannot_be_tampered():
     tokens=ActionTokens(Settings(app_secret_key='test-secret'))
@@ -204,7 +224,8 @@ def test_empty_environment_values_keep_scheduler_defaults(monkeypatch):
     monkeypatch.setenv('POLL_INTERVAL_SECONDS','')
     monkeypatch.setenv('POLLING_ENABLED','')
     monkeypatch.setenv('MIN_NOTIFY_SCORE','')
-    cfg=Settings()
+    # This is a defaults test; it must not inherit the operator's local .env.
+    cfg=Settings(_env_file=None)
     assert cfg.polling_enabled is True and cfg.poll_interval_seconds == 900 and cfg.min_notify_score == 70
 
 def test_discord_scan_times_use_native_dynamic_timestamps():
@@ -246,6 +267,18 @@ def test_default_motivation_pool_is_available():
 
 def test_root_route_is_render_probe_friendly():
     assert home().status_code == 200
+
+def test_jobs_table_is_date_sorted_read_only_and_uses_safe_listing_links(tmp_path,monkeypatch):
+    repo=Repository(f'sqlite:///{tmp_path}/table.db'); repo.create_schema()
+    newer=job(source_job_id='new',title='Software Engineer',date_posted=datetime.now(timezone.utc)-timedelta(hours=2))
+    older=job(source_job_id='old',title='IT Support Specialist',date_posted=datetime.now(timezone.utc)-timedelta(days=2))
+    for item in (older,newer):
+        score,reasons,warnings,_=evaluate(item); repo.save(item,score,reasons,warnings)
+    monkeypatch.setattr(main_module,'repo',repo)
+    page=main_module.jobs_table(min_score=0,days=30).body.decode()
+    assert page.index('Software Engineer') < page.index('IT Support Specialist')
+    assert 'VIEW JOB' in page and 'After Hours Job Hunter • Made by masoncalix' in page
+    assert 'submits an application' in page
 
 @pytest.mark.asyncio
 async def test_brightdata_normalizes_and_caches_results():

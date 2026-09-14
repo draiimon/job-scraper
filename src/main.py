@@ -1,15 +1,15 @@
 from __future__ import annotations
-import asyncio, json, logging
+import asyncio, csv, io, json, logging
 from datetime import datetime, timedelta, timezone
 from html import escape
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from .config import settings
 from .jobs import NormalizedJob
-from .models import Job, JobStatus, SourceRun, SourceHealth
+from .models import Job, JobStatus, SourceRun, SourceHealth, JobEvent
 from .services import Pipeline, Repository
 from .sources import configured_sources
 from .applications import eligible_for_email, write_package, revised_cover_letter
@@ -185,6 +185,57 @@ def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
         if status: q=q.where(Job.status==status)
         elif not include_expired: q=q.where(Job.status!=JobStatus.EXPIRED.value)
         return s.scalars(q.order_by(Job.date_discovered.desc()).limit(200)).all()
+
+@app.get('/jobs/table',response_class=HTMLResponse)
+def jobs_table(min_score:int=0, days:int=30, page:int=1, status:str|None=None):
+    """Public, read-only table of the current stored job matches.
+
+    `jobs_checked` is a scan counter; this table deliberately shows only jobs
+    that passed normalization/filtering and were saved for review.
+    """
+    min_score=max(0,min(100,min_score)); days=max(1,min(90,days)); page=max(1,page); page_size=50
+    cutoff=datetime.now(timezone.utc)-timedelta(days=days)
+    with repo.sessions() as s:
+        filters=[Job.status!=JobStatus.EXPIRED.value,Job.score>=min_score,Job.date_posted.is_not(None),Job.date_posted>=cutoff]
+        if status: filters.append(Job.status==status.upper())
+        query=(select(Job).where(*filters)
+               .order_by(Job.date_posted.desc()).offset((page-1)*page_size).limit(page_size))
+        rows=s.scalars(query).all()
+        totals=dict(s.execute(select(Job.status, func.count()).group_by(Job.status)).all())
+    def posted(value):
+        if not value: return 'Date unavailable'
+        if value.tzinfo is None: value=value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc).strftime('%Y-%m-%d')
+    def listing(url):
+        if not url.startswith(('https://','http://')): return 'Unavailable'
+        return f'<a class="view" href="{escape(url,quote=True)}" target="_blank" rel="noopener noreferrer">VIEW JOB</a>'
+    table_rows=''.join(
+        f'<tr><td>{posted(job.date_posted)}</td><td><a class="role" href="/jobs/{job.id}/timeline"><strong>{escape(job.title)}</strong></a><br><span>{escape(job.company)}</span></td><td>{escape(job.location or "Not stated")}</td><td>{job.score}%</td><td>{escape(job.status)}</td><td>{listing(job.application_url or job.url)}</td></tr>'
+        for job in rows
+    ) or '<tr><td colspan="6" class="empty">No recent stored matches meet these filters yet.</td></tr>'
+    query_args=f'min_score={min_score}&days={days}' + (f'&status={escape(status,quote=True)}' if status else '')
+    next_link=f'<a href="/jobs/table?{query_args}&page={page+1}">Next page →</a>' if len(rows)==page_size else ''
+    status_chips=' '.join(f'<a class="chip" href="/jobs/table?min_score={min_score}&days={days}&status={key}">{escape(key.title())}: {value}</a>' for key,value in sorted(totals.items()))
+    return HTMLResponse(f'''<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>After Hours Job Hunter — Jobs</title><style>
+body{{margin:0;background:#130606;color:#f7eee8;font:15px system-ui,-apple-system,Segoe UI,sans-serif}}main{{max-width:1180px;margin:auto;padding:28px 18px}}h1{{margin:0;color:#ff7f00;font-size:24px}}p{{color:#cbbdb4}}.meta{{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}}.chip{{background:#2a1714;border:1px solid #5b2c20;padding:7px 10px;border-radius:6px;text-decoration:none;color:#f7eee8}}table{{width:100%;border-collapse:collapse;background:#21100e;border-left:4px solid #ff7f00}}th,td{{padding:13px 12px;text-align:left;border-bottom:1px solid #48231c;vertical-align:top}}th{{color:#ffb36b;font-size:12px;letter-spacing:.06em}}td span{{color:#cbbdb4;font-size:13px}}.view{{color:#fff;background:#b94d10;text-decoration:none;padding:7px 9px;border-radius:4px;font-size:12px;font-weight:700}}.role{{color:#f7eee8;text-decoration:none}}.empty{{color:#cbbdb4;text-align:center;padding:32px}}a{{color:#ffb36b}}@media(max-width:720px){{main{{padding:18px 10px}}th:nth-child(3),td:nth-child(3),th:nth-child(5),td:nth-child(5){{display:none}}th,td{{padding:11px 8px}}}}</style></head><body><main><h1>AFTER HOURS JOB HUNTER</h1><p>Recent stored job matches, ordered by the employer’s posted date. This page is read-only and never submits an application.</p><div class="meta"><span class="chip">Last {days} days</span><span class="chip">Minimum match: {min_score}%</span><span class="chip">Page {page}</span><a class="chip" href="/jobs/table?min_score=60&days=30">60%+ matches</a><a class="chip" href="/jobs/export.csv?min_score={min_score}&days={days}">DOWNLOAD CSV</a>{status_chips}</div><table><thead><tr><th>POSTED</th><th>ROLE / COMPANY</th><th>LOCATION</th><th>MATCH</th><th>STATUS</th><th>LISTING</th></tr></thead><tbody>{table_rows}</tbody></table><p>{next_link}</p><p>After Hours Job Hunter • Made by masoncalix</p></main></body></html>''')
+
+@app.get('/jobs/export.csv')
+def export_jobs_csv(min_score:int=0, days:int=30):
+    cutoff=datetime.now(timezone.utc)-timedelta(days=max(1,min(90,days)))
+    with repo.sessions() as s:
+        rows=s.scalars(select(Job).where(Job.status!=JobStatus.EXPIRED.value,Job.score>=max(0,min(100,min_score)),Job.date_posted.is_not(None),Job.date_posted>=cutoff).order_by(Job.date_posted.desc())).all()
+    output=io.StringIO(); writer=csv.writer(output); writer.writerow(['posted_date','title','company','location','score','status','source','job_url'])
+    writer.writerows([(job.date_posted.isoformat() if job.date_posted else '',job.title,job.company,job.location,job.score,job.status,job.source,job.application_url or job.url) for job in rows])
+    return Response(output.getvalue(),media_type='text/csv',headers={'Content-Disposition':'attachment; filename="after-hours-job-board.csv"'})
+
+@app.get('/jobs/{job_id}/timeline',response_class=HTMLResponse)
+def job_timeline(job_id:int):
+    with repo.sessions() as s:
+        job=s.get(Job,job_id)
+        if not job: raise HTTPException(404,'job not found')
+        events=s.scalars(select(JobEvent).where(JobEvent.job_id==job_id).order_by(JobEvent.created_at.desc())).all()
+    entries=''.join(f'<li><strong>{escape(event.event_type.replace("_"," ").title())}</strong><br><span>{escape(event.detail)} · {escape(event.created_at.strftime("%Y-%m-%d %H:%M UTC"))}</span></li>' for event in events) or '<li>No application activity has been recorded yet.</li>'
+    return HTMLResponse(f'<!doctype html><title>Application Timeline</title><style>body{{background:#130606;color:#f7eee8;font:16px system-ui;padding:28px}}h1{{color:#ff7f00}}li{{background:#21100e;border-left:4px solid #ff7f00;margin:10px 0;padding:12px}}span{{color:#cbbdb4}}</style><h1>{escape(job.title)}</h1><p>{escape(job.company)} · Current status: {escape(job.status)}</p><h2>Application activity</h2><ul>{entries}</ul><p><a href="/jobs/table">Back to job board</a></p>')
 class StatusUpdate(BaseModel): status: JobStatus
 class FindRequest(BaseModel):
     role: str
@@ -249,9 +300,7 @@ async def action_post(token:str):
         return {'result':'cover letter generated','path':str(path)}
     if action in {'applied','saved','ignored'}:
         status={'applied':'APPLIED','saved':'SAVED','ignored':'IGNORED'}[action]
-        with repo.sessions() as s:
-            stored=s.get(Job,job.id)
-            if stored.status!=status: stored.status=status; s.commit()
+        repo.set_job_status(job.id,status,f'{status.title()} from signed action.')
         return {'result':status}
     if action=='remind':
         with repo.sessions() as s:

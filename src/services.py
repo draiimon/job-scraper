@@ -9,9 +9,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings
 from .jobs import NormalizedJob, evaluate, extract_skills, is_ph_location, freshness, is_active_listing
-from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, ResumeProfile
+from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, ResumeProfile, JobEvent
 from .security import ActionTokens
 log=logging.getLogger(__name__)
+DISCORD_ALERT_ROLE_ALLOWLIST={'1346328166100107366'}
 class Repository:
     def __init__(self, url: str):
         # Supabase commonly supplies postgresql:// URLs; explicitly select the
@@ -108,6 +109,70 @@ class Repository:
             if item: item.value=encoded
             else: s.add(AppState(key=key,value=encoded))
             s.commit()
+    def acquire_discord_bot_lease(self, instance_id: str, ttl_seconds: int = 60) -> bool:
+        """Acquire the renewable gateway lease without ever storing a token.
+
+        Row locking makes this atomic on Postgres; SQLite serializes the small
+        write transaction used by local tests/development.
+        """
+        key='discord_bot_gateway_lease'; now=datetime.now(timezone.utc)
+        expires=now+timedelta(seconds=max(15, ttl_seconds))
+        with self.sessions.begin() as s:
+            row=s.execute(select(AppState).where(AppState.key==key).with_for_update()).scalar_one_or_none()
+            current={}
+            if row:
+                try: current=json.loads(row.value)
+                except json.JSONDecodeError: current={}
+            owner=str(current.get('owner') or '')
+            try:
+                valid_until=datetime.fromisoformat(str(current.get('expires_at')))
+                if valid_until.tzinfo is None: valid_until=valid_until.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError): valid_until=now-timedelta(seconds=1)
+            if owner and owner != instance_id and valid_until > now:
+                return False
+            payload={'owner':instance_id,'expires_at':expires.isoformat()}
+            if row: row.value=json.dumps(payload)
+            else: s.add(AppState(key=key,value=json.dumps(payload)))
+        return True
+    def renew_discord_bot_lease(self, instance_id: str, ttl_seconds: int = 60) -> bool:
+        key='discord_bot_gateway_lease'; now=datetime.now(timezone.utc)
+        with self.sessions.begin() as s:
+            row=s.execute(select(AppState).where(AppState.key==key).with_for_update()).scalar_one_or_none()
+            if not row: return False
+            try: current=json.loads(row.value)
+            except json.JSONDecodeError: return False
+            if current.get('owner') != instance_id: return False
+            row.value=json.dumps({'owner':instance_id,'expires_at':(now+timedelta(seconds=max(15,ttl_seconds))).isoformat()})
+        return True
+    def release_discord_bot_lease(self, instance_id: str) -> None:
+        key='discord_bot_gateway_lease'
+        with self.sessions.begin() as s:
+            row=s.execute(select(AppState).where(AppState.key==key).with_for_update()).scalar_one_or_none()
+            if not row: return
+            try: current=json.loads(row.value)
+            except json.JSONDecodeError: current={}
+            if current.get('owner') == instance_id:
+                row.value=json.dumps({'owner':'','expires_at':datetime.now(timezone.utc).isoformat()})
+    def claim_bot_alert(self, job_id: int) -> bool:
+        """Reserve a pending alert before sending so it cannot ping twice."""
+        with self.sessions.begin() as s:
+            job=s.get(Job,job_id)
+            if not job or job.notification_state != 'BOT_PENDING':
+                return False
+            job.notification_state='BOT_SENDING'
+        return True
+    def set_job_status(self, job_id: int, status: str, detail: str = '') -> bool:
+        """Persist a state change and its audit event in one transaction."""
+        with self.sessions.begin() as s:
+            job=s.get(Job,job_id)
+            if not job: return False
+            if job.status == status: return True
+            previous=job.status; job.status=status
+            s.add(JobEvent(job_id=job_id,event_type=status,detail=detail or f'{previous} → {status}'))
+        return True
+    def record_job_event(self, job_id: int, event_type: str, detail: str = '') -> None:
+        with self.sessions.begin() as s:
+            if s.get(Job,job_id): s.add(JobEvent(job_id=job_id,event_type=event_type,detail=detail))
     def resume_record(self):
         with self.sessions() as s:
             item=s.get(ResumeProfile,1)
@@ -173,7 +238,12 @@ class Discord:
         fields.append({'name':'𝐒𝐓𝐀𝐓𝐔𝐒','value':'Ready to review' if job.status not in ('APPLIED','IGNORED') else job.status.title(),'inline':False})
         if self.cfg and self.cfg.public_base_url:
             fields.append({'name':'𝐖𝐀𝐍𝐓 𝐓𝐎 𝐅𝐈𝐍𝐃 𝐀 𝐒𝐏𝐄𝐂𝐈𝐅𝐈𝐂 𝐉𝐎𝐁?','value':'Find or filter the exact role you want to apply for here.','inline':False})
-        return {'content':random.choice(self.motivations),'embeds':[{'title':label,'description':f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n\n'+' · '.join(details),'url':job.url,'fields':fields,'footer':{'text':footer}}],'components':[] if test else rows}
+        configured_role=(self.cfg.discord_alert_role_id if self.cfg else None)
+        role_id=configured_role if configured_role in DISCORD_ALERT_ROLE_ALLOWLIST else None
+        role_mention=f'<@&{role_id}>' if role_id and not test else ''
+        content='\n\n'.join(part for part in (role_mention,random.choice(self.motivations)) if part)
+        allowed={'parse':[], 'roles':[str(role_id)]} if role_id and not test else {'parse':[]}
+        return {'content':content,'allowed_mentions':allowed,'embeds':[{'title':label,'description':f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n\n'+' · '.join(details),'url':job.url,'fields':fields,'footer':{'text':footer}}],'components':[] if test else rows}
     async def send(self,job):
         if not self.url: return 'SKIPPED'
         return await self.send_payload(self.payload(job))

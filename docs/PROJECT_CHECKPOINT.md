@@ -1,124 +1,91 @@
 # Project Checkpoint
 
-## Repository
+## Repository and purpose
 
-GitHub: https://github.com/draiimon/job-scraper  
-Branch: `main`  
-Owner: `draiimon`
+- Repository: `https://github.com/draiimon/job-scraper`
+- Branch: `main`
+- Owner: `draiimon`
 
-## Project goal
-
-After Hours Job Hunter monitors recent Philippine and Remote PH technology roles, filters them against the active profile, stores results persistently, and provides job search and application preparation through Discord.
+After Hours Job Hunter is a Discord-first monitor for recent entry-level Philippine and Remote PH technology jobs. It discovers, filters, scores, deduplicates, stores, and presents opportunities without making AI, Bright Data, or any single source a dependency for normal ATS polling.
 
 ## Current architecture
 
-- FastAPI application and in-process scheduler
-- Discord bot as the primary UI
-- Discord webhook as emergency notification fallback
-- SQLAlchemy persistence using PostgreSQL/Supabase in deployment or SQLite locally
-- Greenhouse, Lever, and Ashby ATS adapters
-- Optional Bright Data LinkedIn adapter and manual Google-authenticated JobStreet browser discovery
-- Optional Gemini cover-letter polishing with deterministic fallback
-- Docker and Render-compatible process configuration
+- FastAPI service with an in-process 900-second scheduler.
+- PostgreSQL/Supabase persistence in deployment, SQLite fallback locally.
+- Public Greenhouse, Lever, and Ashby adapters, with `config/job_sources.json` as the checked-in fallback.
+- Optional Bright Data LinkedIn discovery and authenticated JobStreet browser discovery.
+- Discord bot is the primary interface. A webhook is emergency alert fallback only and never competes with a healthy bot.
+- Gemini is optional. It only edits a deterministic cover-letter draft after an application review is started.
+- Docker/Render compatible: binds to `0.0.0.0`, honours `PORT`, and has no persistent-local-disk dependency for core monitoring.
 
-## Discord UX
+## Discord-first operation
 
 Commands:
 
-- `v!search <role>`
-- `v!latest`
-- `v!status`
-- `v!scan`
-- `v!resume`
-- `v!help`
+- `v!search <role>` — targeted recent search, with immediate acknowledgement, typing/progress updates, query expansion, cache, cooldown, and no duplicate response.
+- `v!latest` — newest qualifying stored matches.
+- `v!viewall` — compact paginated Discord job board.
+- `v!status` — scheduler, source, database, Discord, LinkedIn, JobStreet, and AI health.
+- `v!scan` — one protected immediate background scan.
+- `v!resume` — private resume-management flow.
+- `v!help` — command guide.
 
-The persistent bot-authored control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW STATUS`, `HELP`, and optional `UPLOAD RESUME`. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`. Application review provides `VIEW COVER LETTER`, `REGENERATE`, `USE TEMPLATE`, `VIEW RESUME`, `SEND APPLICATION`, and `CANCEL`, followed by a second confirmation.
+The persistent bot-authored control panel provides matching buttons for scan, search, latest, view-all, status, help, and resume upload where configured. Discord controls do not redirect to internal web pages. `VIEW JOB` is the only normal external job-card button and opens the original employer/ATS listing.
 
-The embed style is dark Discord UI with an orange accent, compact fields, selective Unicode headings, and the footer `After Hours Job Hunter • Made by masoncalix`. Rotating motivational headlines appear only on real job alerts.
+All user-facing embeds use the shared factory based on the verified reference message in channel `1346038098802249798`, message `1346058363556986963`: warm orange `#FF7F00`, compact hierarchy, mobile-readable fields, and footer `After Hours Job Hunter • Made by masoncalix`. The gallery preview uses these production renderers and safe no-ping/no-write mock data.
 
-Slow button and modal callbacks acknowledge immediately and move synchronous database/file work to `asyncio.to_thread`. The persistent view uses `timeout=None`, stable custom IDs, and is restored in `on_ready`.
+## Scheduler and sources
 
-## Scheduler
+Startup performs one controlled scan. Automatic scans then run every 900 seconds. Manual scans run in the background, do not move the scheduled next-poll deadline, have a five-minute cooldown, and allow only one global scan. Independent ATS sources use bounded concurrency and per-source timeouts; a slow or failed source cannot block the batch.
 
-- One controlled startup scan
-- Automatic scans every 900 seconds
-- `v!scan`/`SCAN NOW` runs one extra background scan
-- Manual scans preserve the existing automatic `next_poll_at`
-- One global scan at a time
-- Five-minute manual cooldown
-- Source concurrency and per-source timeouts
-- Synchronous scan persistence is offloaded so Discord heartbeats remain responsive
+`SOURCE_TARGETS_JSON`, when valid and non-empty, overrides `config/job_sources.json`. Blank values keep the checked-in fallback active. The service records source state and continues if an optional source fails.
 
-## Job sources
+LinkedIn is optional and is used only when Bright Data is enabled, authenticated, has the correct LinkedIn Jobs dataset/input configuration, and stays within the configured free-tier request limit. It is never required for ATS scanning or Discord search.
 
-If `SOURCE_TARGETS_JSON` is valid and non-empty, it overrides `config/job_sources.json`. Empty values fall back to the checked-in JSON file. The checked-in fallback currently contains six public boards; the active verified deployment loaded 26 targets through its valid override. Invalid or empty source configuration fails explicitly instead of silently producing zero sources.
+JobStreet is optional. Run `python -m src.jobstreet_auth` locally, complete Continue-with-Google, 2FA, consent, or CAPTCHA manually, and keep the resulting `data/private/jobstreet_session.json` private. For Render, place only a base64-encoded storage state in secret `JOBSTREET_SESSION_STATE_B64`; runtime materializes it privately. No password, cookies, session JSON, or token belongs in Git. Status is reported as `READY`, `AUTH REQUIRED`, or a source error based on available authenticated state and results.
 
-LinkedIn is disabled unless Bright Data is enabled, authenticated, supplied with valid inputs, and configured with the LinkedIn dataset. Bright Data JobStreet remains a separate optional adapter. Authenticated browser discovery uses a manually authenticated Playwright Google session at `data/private/jobstreet_session.json`; it reports `AUTH REQUIRED` when no valid saved session is available. It never stores Google passwords, automates 2FA, bypasses CAPTCHA, or submits applications.
+## Freshness, relevance, and alerts
 
-## Filtering rules
+The pipeline prioritizes DevOps, cloud, infrastructure, systems, Linux, SRE, support, networking, software, QA, operations, analyst, cybersecurity, and other credible junior technology roles. It rejects unrelated accounting, HR, sales, marketing, generic VA, admin, and nontechnical customer-service work.
 
-The scanner prioritizes DevOps, Cloud, Infrastructure, Platform, Systems, Linux, SRE, Cloud Operations, IT Support, Technical Support, Service Desk, NOC, Networking, Software Engineering, QA, Application Support, IT Operations, Systems Analyst, and Cybersecurity roles. It rejects unrelated Accounting, Finance, HR, Recruiting, Sales, Marketing, Admin, generic VA, and nontechnical customer-service listings.
+Freshness uses the actual source post date, not discovery time. Jobs from 0–3 days receive highest priority; 4–7 days normal priority; 8–14 days reduced priority; 15–30 days require a strong match; jobs older than 30 days are normally skipped. A stored job can alert again only with source evidence of a genuine repost/reactivation, such as a new posting timestamp or ID. Cross-source deduplication remains active.
 
-Freshness is based on the source posting timestamp, not discovery time. Older listings are not presented as newly posted. Strong seniority signals such as Senior, Lead, Staff, Principal, Architect, Manager, and four-plus years are penalized or suppressed for this profile.
+Only a real new qualifying automatic alert can mention role `<@&1346328166100107366>`. The allowlist permits that role only. Search, status, help, previews, errors, scan updates, saves, and duplicate deliveries never ping a role, `@everyone`, or `@here`.
 
-## Application workflow
+## Cover-letter and application flow
 
-`APPLY NOW` loads the stored job and canonical resume context, creates a deterministic truthful draft, optionally asks Gemini to revise it, validates the result, and presents the application review inside Discord. Gemini failures fall back to the deterministic draft. No resume facts, skills, employers, dates, achievements, or metrics are invented.
+`APPLY NOW` loads the selected job and canonical resume, builds a deterministic truthful draft, optionally lets Gemini improve grammar, validates the final text, then opens an ephemeral Discord review. The same canonical final text supplies Discord preview, copyable TXT, and PDF. The letter has a complete contact header, professional paragraph spacing, simple natural English, and role-specific facts only.
 
-`APPLICATION_DRY_RUN=true` prevents employer contact. Live sending is not implemented, employer email addresses are never guessed, and duplicate applications are blocked.
+Review actions include cover-letter preview/download, regenerate, use-template, resume preview, send confirmation, and cancel. Gemini rate limits, timeouts, invalid responses, or unavailable quota fall back immediately to the deterministic letter. Generated letters are cached per job. `APPLICATION_DRY_RUN=true` simulates sending and never contacts an employer; live sending remains deliberately unimplemented.
 
-## Environment variables
+## Important configuration
 
-Use `.env.example` as the name reference. Store values only in the deployment environment or secret manager. Important names include `DATABASE_URL`, `DISCORD_BOT_TOKEN`, `DISCORD_CONTROL_CHANNEL_ID`, `DISCORD_WEBHOOK_URL`, `POLLING_ENABLED`, `POLL_INTERVAL_SECONDS`, `SOURCE_TARGETS_JSON`, `SOURCE_CONFIG_PATH`, `APPLICATION_DRY_RUN`, `APP_SECRET_KEY`, `PUBLIC_BASE_URL`, Bright Data variables, Gemini variables, and Google OAuth variables. No values belong in this checkpoint.
+Copy `.env.example`; never commit values. Important names include `DATABASE_URL`, `DISCORD_BOT_TOKEN`, `DISCORD_CONTROL_CHANNEL_ID`, `DISCORD_WEBHOOK_URL`, `DISCORD_ALERT_ROLE_ID`, `POLLING_ENABLED`, `POLL_INTERVAL_SECONDS`, `SOURCE_TARGETS_JSON`, `SOURCE_CONFIG_PATH`, `APP_SECRET_KEY`, `APPLICATION_DRY_RUN`, Gemini variables, Bright Data variables, `JOBSTREET_SESSION_PATH`, and `JOBSTREET_SESSION_STATE_B64`.
 
-## Important files
+## Verification and deployment
 
-- `src/main.py` — FastAPI app lifespan, scheduler, scan lifecycle, health endpoint, and Discord task supervision
-- `src/discord_bot.py` — Discord bot, persistent control panel, commands, views, modals, job cards, and application review
-- `src/services.py` — repository, persistence, source processing, notifications, deduplication, and fallback delivery
-- `src/config.py` — settings, empty-environment handling, source fallback, motivations, and optional integrations
-- `src/manual_search.py` — targeted Discord search flow
-- `src/jobs.py` — normalization, freshness, location, scoring, and filtering
-- `src/applications.py` — deterministic cover letters, Gemini revision, validation, and application packages
-- `src/brightdata.py` — optional Bright Data LinkedIn/JobStreet adapters
-- `src/jobstreet.py` — manual Google-session setup and authenticated JobStreet discovery source
-- `src/jobstreet_auth.py` — `python -m src.jobstreet_auth` interactive setup command
-- `config/job_sources.json` — checked-in public ATS fallback targets
-- `tests/test_pipeline.py` — regression and behavior tests
-- `Dockerfile` and `render.yaml` — production-compatible process configuration
+Run:
 
-## Current verified state
+```bash
+pytest -q
+python -m compileall -q src
+git diff --check
+python -m src.preview_discord_ui
+```
 
-- Current commit: `f0085c07e87ca592f39cb8a88497c3e134618ac5`
-- Tests: 35 passed
-- Scheduler: running at 900 seconds
-- Discord: gateway connected and `discord_bot_ready` observed
-- Database: connected
-- Active source count: 26
-- Source health after full scan: 26 working
-- Jobs checked in the verified full scan: 5,103
-- LinkedIn: disabled in the current runtime
-- JobStreet: Google-session discovery is ready only after manual authentication; otherwise `AUTH REQUIRED`
-- Browser job UI: disabled for normal user flow; Discord is primary
-- Render compatibility: preserved through `Dockerfile`, `render.yaml`, `0.0.0.0`, and runtime `PORT`
+The preview posts safe mock UI states through the bot account and does not change the scheduler, create jobs/applications, contact employers, consume scan cooldown, or ping the job-alert role.
 
-## Known limitations / remaining work
+Render needs an external PostgreSQL/Supabase `DATABASE_URL`, bot token, control channel ID, and relevant optional integrations. Free Render instances may sleep, so they cannot guarantee uninterrupted 24/7 polling. Check public `/health` after deployment for scheduler and integration state.
 
-Real user-side Discord button and modal clicks were not available from this environment, so Task #1 remains the live end-to-end interaction verification step. The bot gateway, heartbeat responsiveness during a full scan, callback acknowledgment paths, and application health were verified locally.
+## Known limitations
 
-## Security notes
+- The user must complete JobStreet/Google authentication manually and refresh it when it expires.
+- LinkedIn and JobStreet availability depend on configured authorized accounts, datasets, and free-tier limits.
+- Discord component clicks need live server-side verification after every deployment; unit tests and the gallery cover renderer and safety paths.
+- Application sending is dry-run only by design.
 
-No secrets are documented in this file. Do not commit `.env`, Discord credentials, database credentials, Bright Data tokens, Gemini keys, Google OAuth secrets, `APP_SECRET_KEY`, private resumes, or generated private application documents. A webhook URL must remain in the secret manager and should be rotated separately if it was ever exposed.
+## Latest verified state
 
-## Rules for future agents
-
-- Discord bot stays primary; webhook is fallback notification only.
-- Do not recreate a user-facing web job dashboard.
-- Preserve the automatic 900-second scheduler.
-- Manual scans must not reset the automatic deadline.
-- Keep source fallback behavior and explicit configuration failures.
-- Do not fabricate resume or job facts.
-- Keep freshness and seniority filters intact.
-- Do not add paid scraping fallbacks automatically.
-- Preserve the `draiimon/job-scraper` repository and `main` branch.
-- Preserve Render compatibility.
+- Tests: 69 passed (one third-party Python 3.12 `audioop` deprecation warning)
+- Final release commit: current `main` HEAD (see `git log -1 --oneline`)
+- Included finalization: Discord-first controls, JobStreet Render-session handling, visual gallery, date-sorted job table/export/timeline, role-alert safeguards, and targeted-search regression tests.

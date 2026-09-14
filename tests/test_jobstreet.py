@@ -12,6 +12,7 @@ from src.jobstreet import (
     _parse_posted,
     authenticate_jobstreet,
     has_storage_state,
+    ensure_storage_state,
     jobstreet_sources,
     jobstreet_status,
 )
@@ -31,6 +32,14 @@ def test_jobstreet_storage_state_is_accepted_without_exposing_contents(tmp_path)
     assert has_storage_state(cfg)
     assert jobstreet_status(cfg) == "READY"
     assert len(jobstreet_sources(cfg)) == 1
+
+def test_render_secret_restores_private_jobstreet_session(tmp_path):
+    import base64
+    encoded=base64.b64encode(b'{"cookies": [], "origins": []}').decode()
+    path=tmp_path / 'private' / 'jobstreet_session.json'
+    cfg=Settings(jobstreet_session_path=str(path),jobstreet_session_state_b64=encoded)
+    assert ensure_storage_state(cfg) and has_storage_state(cfg)
+    assert path.read_text(encoding='utf-8') == '{"cookies":[],"origins":[]}'
 
 
 def test_jobstreet_normalizes_visible_discovery_listing():

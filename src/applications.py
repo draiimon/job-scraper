@@ -107,7 +107,10 @@ def _first(mapping: dict, *keys: str) -> str:
 
 def _display_url(value: str) -> str:
     """Keep contact links readable in a letter header without hiding their destination."""
-    return re.sub(r"^https?://", "", value.strip(), flags=re.IGNORECASE).rstrip("/ ")
+    value=value.strip()
+    if value and not re.match(r"^https?://",value,re.IGNORECASE):
+        value=f"https://{value}"
+    return value.rstrip("/ ") + ("/" if value.rstrip("/ ").endswith("draiimon.gt.tc") else "")
 
 
 def _candidate_profile(resume_text: str | None) -> CandidateProfile:
@@ -217,10 +220,10 @@ def _experience_paragraph(job_text: str, resume_text: str | None) -> str:
             "to the behavior of the application being delivered."
         )
         return (
-            f"During my Cloud DevOps internship at Oaktree Innovations, I worked with {tools} "
-            "while supporting deployment workflows, environment configuration, and infrastructure tasks. "
-            "That experience gave me practical exposure to Infrastructure as Code, CI/CD, troubleshooting, "
-            f"and the day-to-day discipline of delivering applications into cloud environments. {support_sentence}"
+            f"During my Cloud DevOps internship at Oaktree Innovations, I used {tools} while helping with "
+            "deployment workflows, environment configuration, and infrastructure tasks. I gained practical "
+            "exposure to Infrastructure as Code, CI/CD, and troubleshooting. "
+            f"{support_sentence}"
         )
     if ("school web portal" in source or "rag-based" in source or "rag knowledge" in source) and category in {"software", "ai", "general"}:
         technologies = [
@@ -230,11 +233,10 @@ def _experience_paragraph(job_text: str, resume_text: str | None) -> str:
         ][:4]
         tools = _join(technologies) if technologies else "full-stack and AI integration tools"
         return (
-            f"Through freelance full-stack and AI development work on a school web portal, I built student-information, "
-            f"appointment, and administrative features alongside a RAG knowledge assistant using {tools}. "
-            "The work involved connecting application flow, databases, searchable content, and deployment concerns. "
-            "It gave me practical experience translating requirements into a usable application while keeping the "
-            "technical pieces understandable and connected."
+            f"Through freelance full-stack and AI development work on a school web portal, I built student, "
+            f"appointment, and administrative features with a RAG knowledge assistant using {tools}. "
+            "This involved application flow, databases, searchable content, and deployment. It taught me how "
+            "to turn requirements into a usable application and keep the technical parts connected."
         )
     if resume_text:
         skills = [
@@ -267,11 +269,10 @@ def _project_paragraph(job_text: str, resume_text: str | None) -> str:
         )
     if _contains(job_text, "kubernetes", "infrastructure", "platform", "devops", "cloud") and "kubernetes" in source:
         return (
-            "A Kubernetes deployment lab further developed this foundation through containerized workloads, "
-            "Deployments, Services, and Nginx Ingress in a Linux environment. It helped me understand how "
-            "applications are packaged, exposed, and troubleshot across the parts of a deployment system. "
-            "That project-based practice complements my internship exposure to cloud delivery without presenting "
-            "the lab as production employment."
+            "My Kubernetes deployment lab used containerized workloads, Deployments, Services, and Nginx "
+            "Ingress in Linux. It helped me understand how applications are packaged, exposed, and troubleshot "
+            "as part of a deployment system. This was project work, not production employment, but it supports "
+            "my internship exposure to cloud delivery."
         )
     if category == "ai" and _contains(source, "panicsense", "mbert", "bi-gru", "lstm"):
         models = [
@@ -295,10 +296,10 @@ def _project_paragraph(job_text: str, resume_text: str | None) -> str:
         )
     if category == "software" and "school web portal" in source:
         return (
-            "The school web portal work is especially relevant because it required more than writing isolated "
-            "features: I worked through application flow, database behavior, AI integration, and deployment setup "
-            "as connected parts of one usable product. That project strengthened my habit of tracing a feature from "
-            "its user need through its data and implementation details."
+            "The school web portal work is relevant because it involved more than isolated features. I worked "
+            "with application flow, database behavior, AI integration, and deployment setup as parts of one "
+            "usable product. It strengthened my habit of tracing a feature from the user need to its data and "
+            "implementation details."
         )
     if category == "support" and "oaktree" in source:
         return (
@@ -344,20 +345,20 @@ def cover_letter(job: Job, resume_text: str | None = None) -> str:
         "general": "the technical responsibilities and practical problem solving this role requires",
     }[category]
     opening = (
-        f"The {title} opportunity at {company} stood out to me because it aligns with the direction I have been "
-        f"building through {direction}. The posting's focus on {requirement_text} is relevant to my hands-on background, "
-        "and I am drawn to work where dependable implementation, careful troubleshooting, and clear communication "
-        "matter as much as knowing a particular tool."
+        f"I am applying for the {title} role at {company}. It fits the direction I have been building through "
+        f"{direction}. The posting mentions {requirement_text}, which connects with my hands-on work. I value "
+        "careful implementation, practical troubleshooting, and clear communication. I am looking for a role "
+        "where I can contribute to real work while learning from experienced teammates."
     )
     experience = _experience_paragraph(description, resume_text)
     project = _project_paragraph(description, resume_text)
     closing = (
-        f"I would welcome the opportunity to discuss how my technical foundation and hands-on experience could "
-        f"support {company}'s team. I would also value the chance to continue developing through the work and "
-        "contribute with the same care I bring to technical projects."
+        f"I would welcome the chance to discuss how my technical foundation and hands-on work could support "
+        f"the {company} team. I am ready to learn from the role, ask clear questions, and contribute carefully "
+        "to tasks that need steady follow-through."
     )
 
-    header = [
+    contact = [
         line
         for line in (
             profile_data.name,
@@ -366,15 +367,35 @@ def cover_letter(job: Job, resume_text: str | None = None) -> str:
             profile_data.email,
             profile_data.github,
             profile_data.portfolio,
+        )
+        if line
+    ]
+    return "\n".join(
+        contact
+        + [
+            "",
             _current_date(),
+            "",
             "Hiring Team",
             company,
             "",
             "Dear Hiring Team,",
-        )
-        if line
-    ]
-    return "\n".join(header + ["", opening, "", experience, "", project, "", closing, "", "Thank you for your time and consideration.", "", "Sincerely,", profile_data.name])
+            "",
+            opening,
+            "",
+            experience,
+            "",
+            project,
+            "",
+            closing,
+            "",
+            "Thank you for your time and consideration.",
+            "",
+            "Sincerely,",
+            "",
+            profile_data.name,
+        ]
+    )
 
 
 def _duplicate_text(items: list[str]) -> bool:
@@ -492,7 +513,7 @@ async def generated_letter(
     return final, mode
 
 
-def _write_pdf(letter: str, path: Path) -> None:
+def cover_letter_pdf_bytes(letter: str) -> bytes:
     import pymupdf
 
     document = pymupdf.open()
@@ -509,8 +530,24 @@ def _write_pdf(letter: str, path: Path) -> None:
             page.insert_text((x, y), line, fontname="helv", fontsize=10.5, color=(0, 0, 0))
             y += 15
         y += 3
-    document.save(path)
+    data=document.tobytes()
     document.close()
+    return data
+
+
+def _write_pdf(letter: str, path: Path) -> None:
+    path.write_bytes(cover_letter_pdf_bytes(letter))
+
+
+def cover_letter_filename(job: Job, extension: str) -> str:
+    company=re.sub(r"[^a-z0-9]+", "_", str(job.company).lower()).strip("_").title() or "Company"
+    date=datetime.now(ZoneInfo('Asia/Manila')).date().isoformat()
+    return f"Mark_Andrei_Castillo_Cover_Letter_{company}_{date}.{extension}"
+
+
+def cover_letter_text_bytes(letter: str) -> bytes:
+    """The download is exactly the final validated letter, without Discord markup."""
+    return letter.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
 
 
 def discord_cover_letter_chunks(letter: str, limit: int = 3900) -> list[str]:
@@ -574,7 +611,9 @@ def write_package(
         json.dumps({"job_url": job.url, "title": job.title, "company": job.company, "score": job.score}, indent=2),
         encoding="utf-8",
     )
-    pdf_name = f"Mark_Andrei_Castillo_Cover_Letter_{company_filename}_{datetime.now(ZoneInfo('Asia/Manila')).date().isoformat()}.pdf"
+    pdf_name = cover_letter_filename(job, "pdf")
+    txt_name = cover_letter_filename(job, "txt")
+    (path / txt_name).write_bytes(cover_letter_text_bytes(final_letter))
     _write_pdf(final_letter, path / pdf_name)
     if resume_bytes:
         (path / (resume_filename or "resume.pdf")).write_bytes(resume_bytes)

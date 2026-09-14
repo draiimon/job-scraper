@@ -1,7 +1,7 @@
 from __future__ import annotations
 from datetime import datetime, timezone
 from enum import Enum
-from sqlalchemy import DateTime, Integer, String, Text, JSON, LargeBinary, UniqueConstraint
+from sqlalchemy import DateTime, Integer, String, Text, JSON, LargeBinary, UniqueConstraint, ForeignKey
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def now() -> datetime: return datetime.now(timezone.utc)
@@ -54,6 +54,14 @@ class AppState(Base):
     __tablename__='app_state'
     key: Mapped[str] = mapped_column(String(100),primary_key=True)
     value: Mapped[str] = mapped_column(String(500),default='')
+class JobEvent(Base):
+    """Small immutable activity timeline for the private application tracker."""
+    __tablename__='job_events'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey('jobs.id', ondelete='CASCADE'), index=True)
+    event_type: Mapped[str] = mapped_column(String(64), index=True)
+    detail: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, index=True)
 class ResumeProfile(Base):
     __tablename__='resume_profile'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

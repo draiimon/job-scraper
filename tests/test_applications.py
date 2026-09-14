@@ -117,8 +117,8 @@ def test_contact_header_date_and_four_body_paragraphs_are_present():
         "Bacoor City, Cavite, Philippines\n"
         "+63 953 852 1829\n"
         "andreicastillofficial@gmail.com\n"
-        "github.com/draiimon\n"
-        "www.draiimon.gt.tc\n"
+        "https://github.com/draiimon\n"
+        "https://www.draiimon.gt.tc/\n"
     )
     from src.applications import _current_date
 
@@ -162,7 +162,7 @@ def test_quality_validator_rejects_duplicate_experience_and_missing_identity():
 
 def test_write_package_creates_named_professional_pdf(tmp_path):
     package = write_package(job(), root=tmp_path, letter=cover_letter(job(), RESUME))
-    pdfs = list(package.glob("Mark_Andrei_Castillo_Cover_Letter_Cloud-ph_*.pdf"))
+    pdfs = list(package.glob("Mark_Andrei_Castillo_Cover_Letter_Cloud_Ph_*.pdf"))
 
     assert len(pdfs) == 1
     import pymupdf
@@ -172,6 +172,20 @@ def test_write_package_creates_named_professional_pdf(tmp_path):
     document.close()
     assert "Cloud PH" in extracted
     assert "Oaktree Innovations" in extracted
+    txts = list(package.glob("Mark_Andrei_Castillo_Cover_Letter_Cloud_Ph_*.txt"))
+    assert len(txts) == 1
+    assert txts[0].read_text(encoding="utf-8") == cover_letter(job(), RESUME)
+
+
+def test_copy_ready_letter_keeps_urls_and_paragraphs_without_discord_artifacts():
+    letter = cover_letter(job(), RESUME)
+    assert "andreicastillofficial@gmail.com" in letter
+    assert "https://github.com/draiimon" in letter
+    assert "https://www.draiimon.gt.tc/" in letter
+    assert "\\@" not in letter and "\\." not in letter
+    assert "[image]" not in letter.lower() and "svg" not in letter.lower()
+    assert "Dear Hiring Team,\n\n" in letter
+    assert "\n\nThank you for your time and consideration.\n\nSincerely,\n" in letter
 
 
 @pytest.mark.asyncio

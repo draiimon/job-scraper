@@ -23,13 +23,14 @@ Configure `DISCORD_BOT_TOKEN` for the primary bot experience. The bot supports:
 ```text
 v!search <role>
 v!latest
+v!viewall
 v!status
 v!scan
 v!resume
 v!help
 ```
 
-The persistent control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW STATUS`, `HELP`, and `UPLOAD RESUME` when signed links are configured. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`.
+The persistent control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW ALL JOBS`, `VIEW STATUS`, `HELP`, and `UPLOAD RESUME` when signed links are configured. `v!viewall` provides a compact, paginated Discord job board. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`.
 
 `APPLY NOW` opens an internal review flow. It can prepare a truthful cover letter and show the configured resume before an explicit send confirmation. Live sending is not implemented; dry-run mode is enabled by default. Only `VIEW JOB` and the employer's application URL open external pages.
 
@@ -61,6 +62,9 @@ Useful endpoints:
 - `GET /resume` — active resume status and signed upload link
 - `POST /resume/{token}` — replace the active PDF resume using a signed link
 - `GET /jobs` and `GET /latest` — internal/debugging data endpoints
+- `GET /jobs/table` — date-sorted browser table for stored jobs
+- `GET /jobs/export.csv` — current stored-job export
+- `GET /jobs/{id}/timeline` — stored status-event timeline
 - `POST /find` — intentionally disabled; search is available in Discord
 - `POST /control/scan/{token}` — intentionally disabled; scans are available in Discord
 - `PATCH /jobs/{id}/status` — update job status
@@ -112,7 +116,7 @@ python -m src.jobstreet_auth
 
 The command opens a visible browser, navigates to JobStreet, starts Google sign-in when the button is available, and waits for the user to complete Google authentication, 2FA, security prompts, consent, or CAPTCHA manually. It never receives or stores a Google password, automates 2FA, bypasses CAPTCHA, or prints cookies/tokens. The resulting Playwright storage state is saved at `data/private/jobstreet_session.json`, which is gitignored.
 
-The saved session is reused for JobStreet listing discovery only. Listings enter the normal freshness, technical-role, seniority, scoring, deduplication, and Discord pipeline. JobStreet applications are never submitted automatically. If the session expires, the source reports `AUTH REQUIRED`; run the setup command and authenticate with Google again.
+The saved session is reused for JobStreet listing discovery only. For an ephemeral Render instance, encode the resulting Playwright storage-state JSON as `JOBSTREET_SESSION_STATE_B64` in Render's secret environment; it is materialized only at runtime with private file permissions. Do not put the value in Git or logs. Listings enter the normal freshness, technical-role, seniority, scoring, deduplication, and Discord pipeline. JobStreet applications are never submitted automatically. If the session expires, the source reports `AUTH REQUIRED`; run the setup command and authenticate with Google again.
 
 AI is disabled by default. When enabled for application review, Gemini only revises a deterministic draft, validates the response for common fabricated claims, and falls back to the deterministic letter on any failure or rate limit. It is not part of normal monitoring.
 
