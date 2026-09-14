@@ -1,0 +1,107 @@
+CONTINUE ONLY THE CURRENT COVER-LETTER CLOSEOUT.
+
+Do NOT start the suggested PostgreSQL task.
+Do NOT add unrelated features.
+
+Current cover-letter state is good:
+- focused tests pass
+- Infrastructure / Software / IT Support / AI-ML samples are 250–350 words
+- role-specific selection is fixed
+- validation is stricter
+- PDF filename slug issue is fixed
+- Discord preview preserves paragraph formatting
+
+FINISH the regression coverage you already started, then:
+
+1. Run the COMPLETE test suite.
+2. Run:
+   python -m compileall -q src
+   git diff --check
+3. Inspect the 4 final sample letters for:
+   - natural 2026 tone
+   - no resume dumping
+   - no duplicated experience
+   - no placeholders
+   - no unsupported claims
+   - no fake senior/expert wording
+   - correct candidate contact header
+   - correct company/title/date
+   - proper 250–350 word range
+4. Verify PDF output and filename.
+5. Verify Discord cover-letter preview contains NO:
+   - svg
+   - [image]
+   - avatar URLs
+   - broken Markdown
+   - truncation
+
+IMPORTANT GIT AUTHOR:
+
+Before committing, DO NOT use the Replit default author `AanyaHale`.
+
+Use ONLY:
+
+Name:
+Mark Andrei Castillo
+
+GitHub:
+draiimon
+
+Email:
+99703880+draiimon@users.noreply.github.com
+
+Verify with:
+
+git config user.name
+git config user.email
+
+If necessary, configure THIS repository only:
+
+git config user.name "Mark Andrei Castillo"
+git config user.email "99703880+draiimon@users.noreply.github.com"
+
+Do NOT modify global Git identity unnecessarily.
+
+Then verify:
+
+git status
+git diff --cached --name-only
+
+Do NOT commit:
+- Pasted-* handoff files
+- .env
+- resume/private files
+- JobStreet session files
+- generated cover-letter PDFs
+- credentials/secrets
+
+Commit only the intended cover-letter implementation/tests/docs.
+
+Suggested commit message:
+
+Improve role-tailored cover letter generation
+
+Then push normally to:
+
+https://github.com/draiimon/job-scraper
+branch: main
+
+DO NOT force push.
+
+FINAL RESPONSE ONLY:
+
+COVER LETTER GENERATOR: PASS/FAIL
+2026 QUALITY: PASS/FAIL
+INFRASTRUCTURE: PASS/FAIL
+SOFTWARE: PASS/FAIL
+IT SUPPORT: PASS/FAIL
+AI/ML: PASS/FAIL
+FACT VALIDATION: PASS/FAIL
+GEMINI FALLBACK: PASS/FAIL
+PDF: PASS/FAIL
+DISCORD PREVIEW: PASS/FAIL
+TESTS: X passed / X failed
+GIT AUTHOR: [name/email]
+COMMIT: [hash]
+PUSH: PASS/BLOCKED
+BLOCKER: [NONE or actual blocker]

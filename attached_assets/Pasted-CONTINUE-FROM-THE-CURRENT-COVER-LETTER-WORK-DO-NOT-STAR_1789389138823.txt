@@ -1,0 +1,858 @@
+CONTINUE FROM THE CURRENT COVER-LETTER WORK. DO NOT START OVER.
+
+The current state already has:
+
+- the old weak generator identified and replaced
+- a new deterministic profile-aware writer
+- Gemini preserved as an OPTIONAL editor
+- factual validation architecture
+- PDF generation work
+- Discord cover-letter preview work
+- tests/test_applications.py added
+- current generated sample is factual but was only ~216 words
+- the remaining prose/validator patch partially missed and needs to be finished
+- existing project architecture is already working
+
+FINISH ONLY THIS COVER-LETTER FEATURE.
+
+DO NOT:
+- rebuild the application
+- redesign Discord
+- touch the 15-minute scheduler
+- change source scanning
+- change JobStreet work
+- change LinkedIn logic
+- change Supabase architecture
+- recreate working features
+
+==================================================
+CANONICAL CANDIDATE
+==================================================
+
+Name:
+Mark Andrei R. Castillo
+
+Location:
+Bacoor City, Cavite, Philippines
+
+Phone:
++63 953 852 1829
+
+Email:
+andreicastillofficial@gmail.com
+
+GitHub:
+https://github.com/draiimon
+
+Portfolio:
+https://www.draiimon.gt.tc/
+
+Education:
+Bachelor of Science in Computer Science
+Technological Institute of the Philippines
+2021–2025
+
+==================================================
+VERIFIED PROFESSIONAL EXPERIENCE
+==================================================
+
+Cloud DevOps Intern
+Oaktree Innovations
+March–May 2025
+Biñan, Laguna
+
+Verified work:
+- AWS ECS
+- AWS S3
+- serverless/cloud deployment tasks
+- Docker
+- GitHub Actions
+- Terraform / Infrastructure as Code
+- local/cloud environment configuration
+- monitoring
+- troubleshooting
+- DevOps application-delivery practices
+
+Freelance Full-Stack / AI Developer
+School Web Portal
+April–May 2026
+Dasmariñas, Cavite
+
+Verified work:
+- school web portal
+- student-information features
+- appointment features
+- administrative features
+- RAG chatbot
+- searchable knowledge base
+- LLM integration
+- databases
+- application flow
+- deployment setup
+
+==================================================
+VERIFIED TECHNICAL PROFILE
+==================================================
+
+Cloud / DevOps:
+AWS ECS, Lambda, S3, DynamoDB, IAM, CloudWatch
+Docker
+Kubernetes — basic/hands-on
+Terraform
+Git
+GitHub
+GitHub Actions
+CI/CD
+Linux/Ubuntu
+Bash
+Nginx
+
+Development:
+Python
+Java
+C/C++
+PHP
+SQL
+JavaScript
+Django
+Laravel
+React / Next.js
+Node.js
+Express.js
+
+Databases:
+PostgreSQL
+MySQL
+MongoDB
+Firebase
+DynamoDB
+pgvector
+
+AI / ML:
+RAG
+LLM integration
+Gemini
+Groq
+DeepSeek
+mBERT
+LSTM
+Bi-GRU
+Hugging Face
+YOLOv8
+MediaPipe
+NLTK
+spaCy
+
+Automation:
+Selenium
+Playwright
+
+==================================================
+VERIFIED PROJECTS
+==================================================
+
+Oaktree:
+Docker + AWS ECS + Terraform + GitHub Actions / CI/CD
+
+Cloud Capture:
+AWS S3 + DynamoDB + Lambda + Terraform
+
+School Web Portal & RAG Knowledge Assistant:
+Node.js + Express + PostgreSQL + pgvector + Gemini + Groq + Docker
+
+Kubernetes Deployment Lab:
+Docker + Kubernetes Pods + Deployments + Services + Nginx Ingress + Linux
+
+PanicSense PH:
+mBERT + Bi-GRU + LSTM + AWS + Terraform
+
+SmartSort:
+YOLOv8
+
+SignABC:
+MediaPipe + Python
+
+MoodSync:
+NLP chatbot
+
+SpeakSmart:
+Azure Cognitive Services + NLTK + spaCy + Hugging Face
+
+==================================================
+TARGET QUALITY
+==================================================
+
+The cover letter must feel like a MODERN 2026 technology application.
+
+It should be:
+
+- natural
+- human
+- professional
+- concise
+- personalized
+- grounded
+- technically credible
+- confident without arrogance
+
+Candidate positioning:
+
+EARLY CAREER.
+
+Do NOT make him sound inexperienced or apologetic.
+
+But NEVER make him sound like:
+
+- senior engineer
+- architect
+- expert
+- seasoned professional
+- someone with many years of industry experience
+- owner of large enterprise infrastructure
+
+Do NOT use:
+
+"extensive experience"
+"deep expertise"
+"proven track record"
+"seasoned professional"
+"expert in"
+"perfect candidate"
+
+Do NOT say:
+
+"Although I lack experience..."
+
+or:
+
+"I know I do not have much experience..."
+
+There is no need to apologize for being early-career.
+
+==================================================
+FINAL COVER LETTER STRUCTURE
+==================================================
+
+Target:
+
+250–350 words.
+
+Hard maximum:
+approximately 400 words.
+
+Use a CLEAN CONTACT HEADER:
+
+Mark Andrei R. Castillo
+Bacoor City, Cavite, Philippines
++63 953 852 1829
+andreicastillofficial@gmail.com
+github.com/draiimon
+www.draiimon.gt.tc
+
+[Current Asia/Manila Date]
+
+Hiring Team
+[Company]
+
+Dear Hiring Team,
+
+Then exactly FOUR concise body paragraphs.
+
+--------------------------------------------------
+PARAGRAPH 1 — OPENING
+--------------------------------------------------
+
+Mention:
+
+- exact job title
+- company
+- why this particular role matches his direction/background
+
+Use a modern direct opening.
+
+Avoid:
+
+"I am writing to express my keen interest..."
+"It is with great enthusiasm..."
+"Please accept this letter..."
+"your esteemed organization"
+
+Example STYLE only:
+
+"The Infrastructure Developer opportunity at Morgan McKinley stood out to me because it brings together cloud infrastructure, automation, and development—areas I have been building practical experience in through my internship and technical projects."
+
+Do not hard-code this sentence.
+
+Generate a role-specific version.
+
+--------------------------------------------------
+PARAGRAPH 2 — PROFESSIONAL EXPERIENCE
+--------------------------------------------------
+
+Select ONLY the strongest relevant professional experience.
+
+Usually:
+Oaktree for Cloud/DevOps/Infrastructure.
+
+Freelance Full-Stack/AI for software/web/AI roles.
+
+Both may be mentioned only when genuinely useful.
+
+DO NOT COPY RESUME BULLETS.
+
+DO NOT output:
+
+"Cloud DevOps Intern — Oaktree Innovations Mar-May 2025: Worked with..."
+
+Instead synthesize naturally.
+
+Good style:
+
+"During my Cloud DevOps internship at Oaktree Innovations, I worked with AWS, Docker, GitHub Actions, and Terraform while supporting deployment workflows and local and cloud environment configuration. This gave me practical exposure to Infrastructure as Code, CI/CD, troubleshooting, and cloud-based application delivery."
+
+--------------------------------------------------
+PARAGRAPH 3 — RELEVANT PROJECT / TECHNICAL FOUNDATION
+--------------------------------------------------
+
+Choose ONE strong project or technical area.
+
+Do not dump every project.
+
+Explain the connection to the vacancy.
+
+Cloud/Infrastructure examples:
+
+- Kubernetes Deployment Lab
+- Cloud Capture
+- Oaktree project
+
+Software:
+- School Web Portal
+
+AI:
+- PanicSense PH
+- RAG assistant
+
+IMPORTANT:
+
+Professional experience and project experience must NEVER be blurred.
+
+A project is NOT employment.
+
+--------------------------------------------------
+PARAGRAPH 4 — CLOSING
+--------------------------------------------------
+
+Keep it professional and grounded.
+
+Express:
+- interest in contributing
+- willingness to keep developing professionally
+- openness to discussing the role
+
+Example style:
+
+"I would welcome the opportunity to discuss how my technical foundation, internship experience, and willingness to continue learning could support the team."
+
+Then:
+
+Thank you for your time and consideration.
+
+Sincerely,
+
+Mark Andrei R. Castillo
+
+==================================================
+ROLE-SPECIFIC SELECTION
+==================================================
+
+DEVOPS / CLOUD / INFRASTRUCTURE:
+
+Prioritize:
+- Oaktree internship
+- AWS
+- Docker
+- Terraform
+- GitHub Actions
+- CI/CD
+- Linux
+- Kubernetes Deployment Lab
+- Cloud Capture
+
+Focus on:
+deployment
+automation
+Infrastructure as Code
+containers
+Linux
+troubleshooting
+CI/CD
+cloud environments
+
+SOFTWARE:
+
+Prioritize:
+- Freelance School Web Portal
+- Python
+- JavaScript
+- Node/Express
+- Django/Laravel
+- PostgreSQL
+- REST APIs
+- Docker
+
+IT SUPPORT / SYSTEMS:
+
+Prioritize:
+- Linux
+- Ubuntu
+- command line
+- troubleshooting
+- environment configuration
+- deployment support
+- communication
+- problem solving
+
+Do NOT imply he previously worked professionally as IT Support.
+
+AI / ML:
+
+Prioritize:
+- PanicSense PH
+- RAG
+- Python
+- mBERT
+- LSTM
+- Bi-GRU
+- Gemini
+- Groq
+- Hugging Face
+
+Clearly label project/research experience correctly.
+
+==================================================
+JOB DESCRIPTION ANALYSIS
+==================================================
+
+Before writing:
+
+1. Read actual title.
+2. Read actual company.
+3. Extract the 3–5 most important requirements.
+4. Compare against canonical candidate profile.
+5. Select ONLY relevant candidate facts.
+6. Ignore unrelated skills.
+
+Do not mention technologies just because they exist on the resume.
+
+Example:
+
+If role requires:
+AWS
+Terraform
+CI/CD
+Linux
+
+Use:
+Oaktree
+AWS
+Terraform
+GitHub Actions
+Linux
+possibly Cloud Capture/Kubernetes
+
+Do NOT suddenly mention:
+YOLOv8
+MediaPipe
+NLP
+
+==================================================
+GEMINI WORKFLOW
+==================================================
+
+Gemini is an EDITOR, not the source of truth.
+
+Required pipeline:
+
+job description
+→ extract requirements
+→ select verified facts
+→ deterministic factual draft
+→ Gemini improves wording/naturalness/transitions/relevance
+→ factual validation
+→ quality validation
+→ final output
+
+Gemini MAY:
+- improve grammar
+- improve flow
+- improve transitions
+- make wording more natural
+- tailor emphasis
+
+Gemini MAY NOT invent:
+- employers
+- responsibilities
+- years of experience
+- certifications
+- metrics
+- achievements
+- clients
+- skills
+- projects
+- seniority
+- production ownership
+
+If Gemini introduces unsupported facts:
+reject those changes.
+
+If Gemini is unavailable/rate-limited:
+use deterministic final version.
+
+Never block application preparation because Gemini failed.
+
+==================================================
+FACT VALIDATION
+==================================================
+
+Validate the entire final letter.
+
+Reject/rewrite if it contains:
+
+- unsupported employment
+- unsupported responsibilities
+- invented years
+- invented certification
+- invented metric
+- invented achievement
+- invented company/recruiter details
+- fake production scale
+- fake leadership claim
+- fake expertise level
+
+Also prevent project experience from being represented as employment.
+
+==================================================
+QUALITY VALIDATION
+==================================================
+
+Final cover letter MUST satisfy:
+
+Candidate name: PRESENT
+Phone: PRESENT
+Email: PRESENT
+GitHub: PRESENT
+Portfolio: PRESENT
+Current date: PRESENT
+Correct company: PRESENT
+Correct job title: PRESENT
+
+[Your Name]: FORBIDDEN
+[Company]: FORBIDDEN in final result
+other placeholders: FORBIDDEN
+
+Duplicate Oaktree paragraph: FORBIDDEN
+Duplicate experience: FORBIDDEN
+Duplicate sentence: FORBIDDEN
+Resume bullet dumping: FORBIDDEN
+
+Random ALL CAPS technologies: FORBIDDEN
+
+Examples of bad output:
+
+AWS, TERRAFORM, CI/CD, PYTHON
+
+Do not format skills that way.
+
+Double punctuation:
+FORBIDDEN
+
+Example:
+features..
+
+Unsupported senior claims:
+FORBIDDEN
+
+Word count:
+250–350 preferred
+
+If under 240:
+expand naturally using relevant verified context.
+
+Do NOT add filler just to reach the target.
+
+If above 400:
+condense.
+
+==================================================
+DISCORD COVER LETTER PREVIEW
+==================================================
+
+VIEW COVER LETTER remains INSIDE Discord.
+
+Display:
+
+𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑
+
+Then readable paragraph spacing.
+
+DO NOT render:
+
+svg
+(image)
+[image](...)
+Discord avatar URLs
+debug text
+raw asset URLs
+broken Markdown
+
+Footer:
+
+After Hours Job Hunter • Made by masoncalix
+
+If letter exceeds one Discord embed safely:
+split into clean sections/messages or attach the PDF.
+
+Do not truncate important content.
+
+==================================================
+PDF OUTPUT
+==================================================
+
+Generate:
+
+Mark_Andrei_Castillo_Cover_Letter_{CompanySlug}_{YYYY-MM-DD}.pdf
+
+PDF must be:
+
+- professional
+- simple
+- black/white
+- clean typography
+- readable margins
+- proper paragraph spacing
+- no decorative graphics
+- no fake signatures
+- no AI-looking layout
+
+Use the same validated final text as the Discord preview.
+
+Do NOT generate a different version for PDF.
+
+==================================================
+REGRESSION TESTS
+==================================================
+
+Finish tests/test_applications.py.
+
+Add/keep tests for:
+
+1. contact header completeness
+2. correct candidate name
+3. correct phone
+4. correct email
+5. GitHub
+6. portfolio
+7. current date
+8. correct company
+9. correct title
+10. 250–350 target behavior
+11. no [Your Name]
+12. no unresolved placeholders
+13. no duplicate Oaktree text
+14. no duplicate experience
+15. no copied resume bullets
+16. no random ALL CAPS skill dump
+17. no "extensive experience"
+18. no "deep expertise"
+19. no "seasoned professional"
+20. no fake certifications
+21. no fabricated years
+22. no fabricated metrics
+23. no fabricated responsibilities
+24. no fake recruiter
+25. project/employment distinction
+26. no double punctuation
+27. Gemini unsupported-claim rejection
+28. Gemini failure deterministic fallback
+29. PDF generation
+30. PDF filename
+31. Discord preview sanitation
+
+Also test at least these role categories:
+
+- Infrastructure / Cloud
+- Software
+- IT Support
+- AI / ML
+
+==================================================
+COMPATIBILITY
+==================================================
+
+Do NOT break the existing application flow.
+
+APPLY NOW
+→ application review
+→ cover letter generation
+→ VIEW COVER LETTER
+→ VIEW RESUME
+→ SEND APPLICATION
+→ second confirmation
+
+Keep APPLICATION_DRY_RUN behavior unchanged.
+
+Do NOT send any real application during testing.
+
+==================================================
+DO NOT TOUCH
+==================================================
+
+Unless a regression directly caused by this cover-letter work is found, DO NOT modify:
+
+- automatic scheduler
+- 900-second scan interval
+- Discord control panel
+- ATS sources
+- config/job_sources.json
+- LinkedIn
+- JobStreet
+- Supabase schema
+- job scoring
+- job filtering
+- persistent message
+- webhook fallback architecture
+
+==================================================
+FINAL VERIFICATION
+==================================================
+
+Finish the missed prose/validator patch first.
+
+Then run:
+
+pytest -q
+python -m compileall -q src
+git diff --check
+
+Generate test letters for:
+
+1. Infrastructure Developer
+2. Software Engineer
+3. IT Support role
+4. AI/ML role
+
+Inspect them for quality, not just test assertions.
+
+The Infrastructure letter should be approximately 250–350 words and should NOT look like a resume dump.
+
+Verify PDF output.
+
+Verify Discord preview formatting.
+
+Do NOT send a real employer application.
+
+==================================================
+GIT
+==================================================
+
+After everything passes:
+
+git status
+
+Ensure no:
+- .env
+- resume
+- credentials
+- generated private application PDFs
+- session files
+- uploaded Pasted-* handoff files
+
+are staged.
+
+Commit ONLY the cover-letter feature and its tests/docs if applicable.
+
+Suggested commit:
+
+Improve role-tailored cover letter generation
+
+Push normally to:
+
+https://github.com/draiimon/job-scraper
+branch:
+main
+
+GitHub identity:
+draiimon
+
+Do NOT force push unless explicitly required.
+
+==================================================
+FINAL RESPONSE ONLY
+==================================================
+
+COVER LETTER GENERATOR:
+PASS/FAIL
+
+2026 WRITING QUALITY:
+PASS/FAIL
+
+ROLE TAILORING:
+PASS/FAIL
+
+CONTACT HEADER:
+PASS/FAIL
+
+WORD COUNT:
+PASS/FAIL
+
+NO RESUME DUMPING:
+PASS/FAIL
+
+NO DUPLICATE EXPERIENCE:
+PASS/FAIL
+
+NO PLACEHOLDERS:
+PASS/FAIL
+
+FACT VALIDATION:
+PASS/FAIL
+
+GEMINI EDITOR:
+PASS/FAIL
+
+GEMINI FALLBACK:
+PASS/FAIL
+
+INFRASTRUCTURE LETTER:
+PASS/FAIL
+
+SOFTWARE LETTER:
+PASS/FAIL
+
+IT SUPPORT LETTER:
+PASS/FAIL
+
+AI/ML LETTER:
+PASS/FAIL
+
+DISCORD PREVIEW:
+PASS/FAIL
+
+PDF:
+PASS/FAIL
+
+APPLICATION FLOW REGRESSION:
+PASS/FAIL
+
+TESTS:
+X passed / X failed
+
+COMMIT:
+[hash/NONE]
+
+PUSH:
+PASS/BLOCKED/NOT NEEDED
+
+BLOCKER:
+[only real blocker or NONE]
