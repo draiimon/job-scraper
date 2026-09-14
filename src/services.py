@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio, logging, random
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import httpx
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import IntegrityError
@@ -70,21 +71,29 @@ class Discord:
         if not self.cfg or not self.cfg.public_base_url: return None
         token=ActionTokens(self.cfg).issue(job.id,action)
         return f'{self.cfg.public_base_url.rstrip("/")}/actions/{token}' if token else None
+    @staticmethod
+    def _posted_label(value):
+        if not value: return None
+        today=datetime.now(ZoneInfo('Asia/Manila')).date(); posted=value.astimezone(ZoneInfo('Asia/Manila')).date(); days=(today-posted).days
+        if days<=0: return 'Posted: Today'
+        if days==1: return 'Posted: Yesterday'
+        if days<=14: return f'Posted: {days} days ago'
+        return f'Posted: {posted.strftime("%b %d, %Y")}'
     def payload(self, job: Job, test=False):
         label='𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇' if job.score>=85 else '𝐄𝐍𝐓𝐑𝐘-𝐋𝐄𝐕𝐄𝐋 𝐓𝐄𝐂𝐇'
         details=[job.location or 'Location not stated']
         if job.work_setup and job.work_setup.lower() not in (job.location or '').lower(): details.append(job.work_setup)
         if job.salary: details.append(job.salary)
-        if job.date_posted: details.append(f'Posted {job.date_posted.date().isoformat()}')
+        if job.date_posted: details.append(self._posted_label(job.date_posted))
         match='\n'.join(job.match_reasons[:6]) or 'Entry-level technology role'
         fields=[{'name':'𝐖𝐇𝐘 𝐈𝐓 𝐅𝐈𝐓𝐒','value':match,'inline':False}]
         if job.warnings: fields.append({'name':'𝐍𝐎𝐓𝐄𝐒','value':'\n'.join(job.warnings[:2]),'inline':False})
         row1=[{'type':2,'style':5,'label':'VIEW JOB','url':job.url}]
         review=self._link(job,'review')
         if review and job.status not in ('APPLIED','IGNORED'):
-            row1 += [{'type':2,'style':5,'label':'APPLY NOW','url':review},{'type':2,'style':5,'label':'REVIEW APPLICATION','url':review}]
+            row1 += [{'type':2,'style':5,'label':'APPLY NOW','url':review}]
         rows=[{'type':1,'components':row1}]
-        actions=[('GENERATE COVER LETTER','generate'),('MARK APPLIED','applied'),('SAVE','saved'),('SKIP','ignored'),('REMIND ME','remind')]
+        actions=[('REVIEW APPLICATION','review'),('SAVE','saved'),('SKIP','ignored')]
         row2=[{'type':2,'style':5,'label':label,'url':url} for label,action in actions if (url:=self._link(job,action))]
         if row2: rows.append({'type':1,'components':row2})
         kind,name=(job.source.split(':',1)+[''])[:2] if ':' in job.source else (job.source,'')
@@ -101,7 +110,8 @@ class Discord:
             r=await c.post(self.url,params={'with_components':'true'},json=payload); r.raise_for_status()
         return 'SENT'
 class Pipeline:
-    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock()
+    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0
+    def begin_cycle(self): self._cycle_notifications=0
     async def process(self, item:NormalizedJob, notify=True) -> tuple[Job|None,bool]:
         if not is_ph_location(item) or not is_active_listing(item): return None, False
         score,reasons,warnings,relevant=evaluate(item)
@@ -112,6 +122,9 @@ class Pipeline:
         if notify and score>=self.config.min_notify_score: await self.notify(job)
         return job, True
     async def notify(self, job: Job):
+        async with self._cycle_lock:
+            if self._cycle_notifications>=self.config.max_notifications_per_cycle: return
+            self._cycle_notifications+=1
         try:
             job.notification_state=await self.discord.send(job)
             if job.notification_state=='SENT': job.status=JobStatus.NOTIFIED.value

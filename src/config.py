@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     discord_motivations_json: str = ""
     min_notify_score: int = 70
     min_auto_application_score: int = 85
+    max_notifications_per_cycle: int = 3
     auto_send_email_applications: bool = False
     polling_enabled: bool = True
     poll_interval_seconds: int = 900
