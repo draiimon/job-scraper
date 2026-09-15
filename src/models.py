@@ -12,6 +12,9 @@ class Job(Base):
     __tablename__="jobs"; __table_args__=(UniqueConstraint("fingerprint", name="uq_job_fingerprint"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     fingerprint: Mapped[str] = mapped_column(String(64), index=True)
+    # Broad company/title/location bucket. Unlike ``fingerprint``, it is not
+    # unique: two genuinely distinct vacancies can share a title and location.
+    identity_key: Mapped[str] = mapped_column(String(64), default="", index=True)
     source: Mapped[str] = mapped_column(String(64), index=True)
     source_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     title: Mapped[str] = mapped_column(String(500), index=True)
@@ -25,6 +28,9 @@ class Job(Base):
     salary: Mapped[str | None] = mapped_column(String(255), nullable=True)
     date_posted: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     date_discovered: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    # Provider posting time, first discovery, and latest confirmation stay
+    # distinct so a listing rediscovered today never becomes "posted today".
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     employment_type: Mapped[str | None] = mapped_column(String(80), nullable=True)
     seniority: Mapped[str | None] = mapped_column(String(80), nullable=True)
     skills: Mapped[list] = mapped_column(JSON, default=list)
@@ -46,6 +52,9 @@ class SourceHealth(Base):
     last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_job_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_raw_jobs: Mapped[int] = mapped_column(Integer, default=0)
+    last_normalized_jobs: Mapped[int] = mapped_column(Integer, default=0)
+    last_accepted_jobs: Mapped[int] = mapped_column(Integer, default=0)
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(24), default='unknown')

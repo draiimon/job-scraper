@@ -26,6 +26,7 @@ from .ai import gemini
 from .security import ActionTokens
 from .brightdata import brightdata_sources
 from .jobstreet import brightdata_jobstreet_status, jobstreet_sources, jobstreet_status
+from .jobspy_source import jobspy_provider_status, jobspy_sources
 from .manual_search import ManualJobSearch
 from .discord_bot import run_discord_bot
 from .resumes import extract_resume_text
@@ -40,11 +41,12 @@ def scheduler_snapshot():
     with repo.sessions() as s:
         source_rows=s.scalars(select(SourceHealth)).all()
         recent=s.scalars(select(Job.id).where(Job.date_posted>=datetime.now(timezone.utc)-timedelta(days=7),Job.status!=JobStatus.EXPIRED.value)).all()
+    health_rows={row.source:row for row in source_rows}
     next_poll=saved.get('next_poll_at'); seconds=0
     if next_poll:
         try: seconds=max(0,int((datetime.fromisoformat(next_poll)-datetime.now(timezone.utc)).total_seconds()))
         except ValueError: pass
-        saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg)})
+        saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','indeed_status':jobspy_provider_status(cfg,health_rows,'indeed'),'google_jobs_status':jobspy_provider_status(cfg,health_rows,'google'),'jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg)})
     return saved
 async def poll_once(manual=False):
     async with poll_lock:
@@ -73,7 +75,7 @@ async def poll_once(manual=False):
             try: await pipeline.discord.update_status(repo,scheduler_snapshot())
             except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
         try:
-            pipeline.begin_cycle(); public_sources=configured_sources(cfg.source_targets); sources=public_sources+brightdata_sources(cfg,repo)+jobstreet_sources(cfg,repo)
+            pipeline.begin_cycle(); public_sources=configured_sources(cfg.source_targets); sources=public_sources+brightdata_sources(cfg,repo)+jobspy_sources(cfg,repo,force=manual)+jobstreet_sources(cfg,repo)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             finished=datetime.now(timezone.utc)
             repo.set_state('scheduler',{'status':'error','phase':'complete','last_poll_at':iso(finished),'next_poll_at':scheduled_next if manual else iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0,'sources_loaded':0,'source_config_error':str(exc)})
@@ -87,6 +89,8 @@ async def poll_once(manual=False):
                     if source.name == 'jobstreet:google-session'
                     else cfg.brightdata_linkedin_scan_timeout_seconds
                     if source.name == 'brightdata:linkedin_jobs'
+                    else cfg.jobspy_scan_timeout_seconds
+                    if source.name.startswith('jobspy:')
                     else cfg.scan_source_timeout_seconds
                 )
                 try: return await asyncio.wait_for(pipeline.run_source(source),timeout=timeout)
@@ -111,13 +115,33 @@ async def poll_once(manual=False):
             'raw_jobs_discovered':sum(x.get('raw_jobs_discovered',x.get('discovered',0)) for x in outcomes),
             'normalized_jobs':sum(x.get('normalized_jobs',0) for x in outcomes),
             'jobs_0_90':sum(x.get('jobs_0_90',0) for x in outcomes),
+            'ph_remote_ph_jobs':sum(x.get('ph_remote_ph',0) for x in outcomes),
             'computer_related_jobs':sum(x.get('computer_related',0) for x in outcomes),
             'entry_level_compatible':sum(x.get('entry_level_compatible',0) for x in outcomes),
+            'qualifying_jobs':sum(x.get('qualifying',0) for x in outcomes),
             'new_database_records':new,
             'qualifying_alerts':pipeline._cycle_notifications,
+            'source_funnels':{
+                item['source']:{
+                    'raw':item.get('raw_jobs_discovered',0),
+                    'normalized':item.get('normalized_jobs',0),
+                    '0_90_days':item.get('jobs_0_90',0),
+                    'ph_remote_ph':item.get('ph_remote_ph',0),
+                    'tech_related':item.get('computer_related',0),
+                    'entry_level_compatible':item.get('entry_level_compatible',0),
+                    'duplicates':item.get('duplicates_removed',0),
+                    'new_unique':item.get('new',0),
+                    'qualifying':item.get('qualifying',0),
+                }
+                for item in outcomes if item['source'].startswith('jobspy:')
+            },
         }
         # status update is best-effort: a webhook outage never stops polling.
-        state.update({'sources_working':sum(1 for source in sources if repo.health(source.name).status=='healthy'),'linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg)})
+        def load_current_health():
+            with repo.sessions() as session:
+                return {row.source:row for row in session.scalars(select(SourceHealth)).all()}
+        current_health=await asyncio.to_thread(load_current_health)
+        state.update({'sources_working':sum(1 for source in sources if repo.health(source.name).status=='healthy'),'linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','indeed_status':jobspy_provider_status(cfg,current_health,'indeed'),'google_jobs_status':jobspy_provider_status(cfg,current_health,'google'),'jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg)})
         repo.set_state('scheduler',state)
         if not cfg.discord_bot_token:
             try: await pipeline.discord.update_status(repo,scheduler_snapshot())

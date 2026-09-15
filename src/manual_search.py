@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
@@ -9,6 +10,7 @@ from typing import Awaitable, Callable
 from sqlalchemy import select
 
 from .brightdata import BrightDataClient, BrightDataJobs
+from .jobspy_source import jobspy_manual_sources
 from .config import Settings
 from .jobs import NormalizedJob, evaluate, freshness, is_ph_location
 from .sources import SourceError, configured_sources
@@ -120,9 +122,15 @@ class ManualJobSearch:
         return 0
 
     @staticmethod
+    def _tokens(value: str) -> set[str]:
+        return set(re.findall(r"[a-z0-9]+", (value or "").lower()))
+
+    @staticmethod
     def _query_terms(role: str) -> set[str]:
-        raw = role.lower().replace("/", " ").replace("-", " ")
-        terms = {token for token in raw.split() if len(token) > 2 and token not in {"engineer", "junior", "entry", "level"}}
+        terms = {
+            token for token in ManualJobSearch._tokens(role)
+            if len(token) > 2 and token not in {"engineer", "junior", "entry", "level"}
+        }
         groups = {
             "software": {"software", "developer", "development", "backend", "frontend", "fullstack", "full", "application"},
             "developer": {"developer", "software", "backend", "frontend", "fullstack", "full", "application"},
@@ -139,9 +147,8 @@ class ManualJobSearch:
 
     @classmethod
     def _matches_query(cls, item: NormalizedJob, role: str) -> bool:
-        title = item.title.lower().replace("/", " ").replace("-", " ")
-        title_terms = set(title.split())
-        requested = {x for x in role.lower().replace("/", " ").replace("-", " ").split() if len(x) > 2}
+        title_terms = cls._tokens(item.title)
+        requested = {token for token in cls._tokens(role) if len(token) > 2}
         expanded = cls._query_terms(role)
         if requested and requested.issubset(title_terms):
             return True
@@ -311,7 +318,7 @@ class ManualJobSearch:
                 score, reasons, warnings = result
                 progress.potential_matches += 1
                 stored = await asyncio.to_thread(self.repo.save, item, score, reasons, warnings)
-                stored = stored or await asyncio.to_thread(self.repo.by_fingerprint, item.fingerprint)
+                stored = stored or await asyncio.to_thread(self.repo.by_item, item)
                 if stored:
                     accepted[stored.fingerprint] = stored
 
@@ -348,7 +355,7 @@ class ManualJobSearch:
         # Manual searches are targeted and bounded. The 15-minute scheduler is
         # responsible for the complete source set; a Discord query must not
         # make the user wait through every configured board.
-        ats = [] if source_filter in ("linkedin", "brightdata_linkedin", "jobstreet") else configured_sources(self.cfg.source_targets)[:8]
+        ats = [] if source_filter in ("linkedin", "brightdata_linkedin", "jobstreet", "indeed", "google", "jobspy", "jobspy_indeed", "jobspy_google") else configured_sources(self.cfg.source_targets)
         jobstreet = []
         if source_filter in ("all", "jobstreet"):
             # A managed JobStreet session is opt-in for targeted searches.
@@ -358,7 +365,16 @@ class ManualJobSearch:
                 jobstreet = jobstreet_sources(self.cfg, self.repo)
             elif not has_managed_connection(self.repo):
                 jobstreet = jobstreet_sources(self.cfg, self.repo)
-        ats = ats + jobstreet
+        jobspy = []
+        if source_filter in ("all", "indeed", "google", "jobspy", "jobspy_indeed", "jobspy_google"):
+            jobspy = jobspy_manual_sources(self.cfg, role, location)
+            if source_filter in ("indeed", "jobspy_indeed"):
+                jobspy = [source for source in jobspy if source.provider == "indeed"]
+            elif source_filter in ("google", "jobspy_google"):
+                jobspy = [source for source in jobspy if source.provider == "google"]
+        # Keep Discord searches bounded: public ATS + JobStreet + both JobSpy
+        # providers share the same eight-source live-search budget.
+        ats = ats[:max(0, 8-len(jobstreet)-len(jobspy))] + jobstreet + jobspy
         progress.sources_total = len(ats) + (1 if self.cfg.brightdata_enabled and self.cfg.brightdata_api_token and source_filter in ("all", "linkedin", "brightdata_linkedin") else 0)
         progress.live_attempted = bool(progress.sources_total)
         await self._emit(progress_callback, progress)
@@ -367,7 +383,8 @@ class ManualJobSearch:
         async def fetch_ats(source):
             async with semaphore:
                 try:
-                    items = await asyncio.wait_for(source.fetch(), timeout=self.cfg.scan_source_timeout_seconds)
+                    timeout = self.cfg.jobspy_scan_timeout_seconds if source.name.startswith("jobspy:") else self.cfg.scan_source_timeout_seconds
+                    items = await asyncio.wait_for(source.fetch(), timeout=timeout)
                     progress.live_available = True
                     await consume(items)
                 except Exception as exc:

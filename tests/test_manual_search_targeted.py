@@ -22,7 +22,7 @@ class FixtureSource:
 @pytest.mark.asyncio
 async def test_targeted_ats_search_works_without_linkedin_or_jobstreet(tmp_path, monkeypatch):
     monkeypatch.setattr("src.manual_search.configured_sources", lambda _targets: [FixtureSource()])
-    cfg = Settings(database_url=f"sqlite:///{tmp_path}/search.db", brightdata_enabled=False, brightdata_api_token=None)
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/search.db", brightdata_enabled=False, brightdata_api_token=None, jobspy_enabled=False)
     repo = Repository(cfg.database_url); repo.create_schema()
     snapshots=[]
 
@@ -48,7 +48,7 @@ async def test_search_does_not_reject_entry_level_job_for_manager_word_in_descri
             )]
 
     monkeypatch.setattr("src.manual_search.configured_sources", lambda _targets: [ManagerMentionSource()])
-    cfg = Settings(database_url=f"sqlite:///{tmp_path}/manager-word.db", brightdata_enabled=False)
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/manager-word.db", brightdata_enabled=False, jobspy_enabled=False)
     repo = Repository(cfg.database_url); repo.create_schema()
 
     outcome = await ManualJobSearch(cfg, repo).find_with_progress("DevOps Engineer")
@@ -88,7 +88,7 @@ async def test_manual_search_limits_live_ats_sources_to_keep_discord_fast(tmp_pa
         async def fetch(self): return []
 
     monkeypatch.setattr("src.manual_search.configured_sources", lambda _targets: [EmptySource(i) for i in range(12)])
-    cfg = Settings(database_url=f"sqlite:///{tmp_path}/bounded.db", brightdata_enabled=False)
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/bounded.db", brightdata_enabled=False, jobspy_enabled=False)
     repo = Repository(cfg.database_url); repo.create_schema()
     outcome = await ManualJobSearch(cfg, repo).find_with_progress("software engineer")
     assert outcome.progress.sources_total == 8

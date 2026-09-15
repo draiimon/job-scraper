@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, logging, random, json
+import asyncio, logging, random, json, re
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings
-from .jobs import NormalizedJob, evaluate, extract_skills, is_ph_location, freshness, is_active_listing
+from .jobs import NormalizedJob, canonicalize_url, clean, evaluate, extract_skills, is_ph_location, freshness, is_active_listing
 from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, AppSetting, ResumeProfile, JobEvent
 from .security import ActionTokens
 log=logging.getLogger(__name__)
@@ -54,6 +54,14 @@ class Repository:
         if self.engine.dialect.name == 'postgresql':
             with self.engine.begin() as connection:
                 connection.execute(text('ALTER TABLE app_state ALTER COLUMN value TYPE TEXT'))
+                connection.execute(text('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE'))
+                connection.execute(text('UPDATE jobs SET last_seen_at = date_discovered WHERE last_seen_at IS NULL'))
+                connection.execute(text('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS identity_key VARCHAR(64)'))
+                connection.execute(text("UPDATE jobs SET identity_key = fingerprint WHERE identity_key IS NULL OR identity_key = ''"))
+                connection.execute(text('CREATE INDEX IF NOT EXISTS ix_jobs_identity_key ON jobs (identity_key)'))
+                connection.execute(text('ALTER TABLE source_health ADD COLUMN IF NOT EXISTS last_raw_jobs INTEGER DEFAULT 0'))
+                connection.execute(text('ALTER TABLE source_health ADD COLUMN IF NOT EXISTS last_normalized_jobs INTEGER DEFAULT 0'))
+                connection.execute(text('ALTER TABLE source_health ADD COLUMN IF NOT EXISTS last_accepted_jobs INTEGER DEFAULT 0'))
         elif self.engine.dialect.name == 'sqlite':
             columns = inspect(self.engine).get_columns('app_state')
             value_column = next((column for column in columns if column['name'] == 'value'), None)
@@ -76,6 +84,21 @@ class Repository:
                         'SELECT "key", value FROM app_state_legacy'
                     )
                     connection.exec_driver_sql('DROP TABLE app_state_legacy')
+            job_columns = {column['name'] for column in inspect(self.engine).get_columns('jobs')}
+            if 'last_seen_at' not in job_columns:
+                with self.engine.begin() as connection:
+                    connection.exec_driver_sql('ALTER TABLE jobs ADD COLUMN last_seen_at DATETIME')
+                    connection.exec_driver_sql('UPDATE jobs SET last_seen_at = date_discovered WHERE last_seen_at IS NULL')
+            if 'identity_key' not in job_columns:
+                with self.engine.begin() as connection:
+                    connection.exec_driver_sql("ALTER TABLE jobs ADD COLUMN identity_key VARCHAR(64) DEFAULT ''")
+                    connection.exec_driver_sql("UPDATE jobs SET identity_key = fingerprint WHERE identity_key IS NULL OR identity_key = ''")
+                    connection.exec_driver_sql('CREATE INDEX IF NOT EXISTS ix_jobs_identity_key ON jobs (identity_key)')
+            health_columns = {column['name'] for column in inspect(self.engine).get_columns('source_health')}
+            for name in ('last_raw_jobs', 'last_normalized_jobs', 'last_accepted_jobs'):
+                if name not in health_columns:
+                    with self.engine.begin() as connection:
+                        connection.exec_driver_sql(f'ALTER TABLE source_health ADD COLUMN {name} INTEGER DEFAULT 0')
     def initialize_runtime_config(self, cfg: Settings) -> dict[str, str]:
         """Create/load safe runtime settings and hydrate the process config."""
         self.create_schema()
@@ -132,18 +155,105 @@ class Repository:
             else:
                 setting.value = str(value)
 
+    @staticmethod
+    def _provenance(item: NormalizedJob) -> dict:
+        metadata=item.raw_metadata or {}
+        return {
+            'source': item.source,
+            'source_job_id': item.source_job_id,
+            'discovery_url': metadata.get('discovery_url') or item.url,
+            'canonical_url': metadata.get('canonical_url') or item.application_url or item.url,
+        }
+
+    @staticmethod
+    def _stored_canonical_url(job: Job) -> str:
+        metadata=job.raw_metadata or {}
+        return canonicalize_url(metadata.get('canonical_url') or metadata.get('direct_apply_url') or job.application_url or job.url)
+
+    @staticmethod
+    def _incoming_canonical_url(item: NormalizedJob) -> str:
+        metadata=item.raw_metadata or {}
+        return canonicalize_url(metadata.get('canonical_url') or metadata.get('direct_apply_url') or item.application_url or item.url)
+
+    @staticmethod
+    def _descriptions_match(left: str, right: str) -> bool:
+        left_clean=clean(left or '')
+        right_clean=clean(right or '')
+        if not left_clean or not right_clean:
+            return False
+        if left_clean == right_clean:
+            return True
+        left_terms=set(re.findall(r'[a-z0-9]{3,}', left_clean))
+        right_terms=set(re.findall(r'[a-z0-9]{3,}', right_clean))
+        if len(left_terms) < 6 or len(right_terms) < 6:
+            return False
+        return len(left_terms & right_terms) / min(len(left_terms), len(right_terms)) >= 0.72
+
+    def _same_vacancy(self, existing: Job, item: NormalizedJob) -> bool:
+        """Require evidence beyond company/title/location before merging."""
+        existing_url=self._stored_canonical_url(existing)
+        incoming_url=self._incoming_canonical_url(item)
+        if existing_url and incoming_url and existing_url == incoming_url:
+            return True
+        if existing.source == item.source and existing.source_job_id and item.source_job_id:
+            if existing.source_job_id == item.source_job_id:
+                return True
+        return self._descriptions_match(existing.description, item.description)
+
+    @staticmethod
+    def _identity_key(item: NormalizedJob) -> str:
+        return item.fingerprint
+
+    def _merge_duplicate_provenance(self, existing: Job, item: NormalizedJob) -> None:
+        """Keep cross-source evidence without creating duplicate canonical jobs."""
+        metadata=dict(existing.raw_metadata or {})
+        provenance=list(metadata.get('source_provenance') or [])
+        incoming=self._provenance(item)
+        key=(incoming.get('source'),incoming.get('source_job_id'),incoming.get('canonical_url'))
+        if not any((row.get('source'),row.get('source_job_id'),row.get('canonical_url'))==key for row in provenance if isinstance(row,dict)):
+            provenance.append(incoming)
+        metadata['source_provenance']=provenance[-8:]
+
+        incoming_direct=(item.raw_metadata or {}).get('direct_apply_url')
+        incoming_canonical=incoming.get('canonical_url')
+        existing_direct=metadata.get('direct_apply_url')
+        official_ats=item.source.startswith(('greenhouse:','lever:','ashby:'))
+        if incoming_canonical and ((incoming_direct and not existing_direct) or (existing.source.startswith('jobspy:') and official_ats)):
+            existing.url=incoming_canonical
+            existing.application_url=incoming_canonical
+            metadata['canonical_url']=incoming_canonical
+            if incoming_direct:
+                metadata['direct_apply_url']=incoming_direct
+        existing.raw_metadata=metadata
+
     def save(self, item: NormalizedJob, score:int, reasons:list[str], warnings:list[str]) -> Job | None:
         with self.sessions() as s:
-            existing=s.scalar(select(Job).where(Job.fingerprint==item.fingerprint))
+            identity_key=self._identity_key(item)
+            candidates=s.scalars(select(Job).where(Job.identity_key==identity_key)).all()
+            # Rows created before the migration used ``fingerprint`` alone.
+            # The fallback makes mixed-version deployments deduplicate safely
+            # before their schema upgrade completes.
+            if not candidates:
+                candidates=s.scalars(select(Job).where(Job.fingerprint==identity_key)).all()
+            existing=next((candidate for candidate in candidates if self._same_vacancy(candidate,item)), None)
             # A changed source ID plus a genuinely newer source timestamp is a
             # repost/reactivation, not a duplicate discovery of an old listing.
             if existing:
                 stored_date=existing.date_posted.replace(tzinfo=timezone.utc) if existing.date_posted and existing.date_posted.tzinfo is None else existing.date_posted
                 repost=(existing.source==item.source and item.source_job_id and item.source_job_id!=existing.source_job_id and item.date_posted and (not stored_date or item.date_posted>stored_date))
-                if not repost: return None
-                existing.source_job_id=item.source_job_id; existing.date_posted=item.date_posted; existing.url=item.url; existing.application_url=item.application_url; existing.description=item.description; existing.score=score; existing.match_reasons=reasons; existing.warnings=warnings; existing.raw_metadata={**item.raw_metadata,'reposted':True}; existing.status=JobStatus.NEW.value; existing.notification_state='PENDING'
+                if not repost:
+                    existing.last_seen_at=datetime.now(timezone.utc)
+                    self._merge_duplicate_provenance(existing,item)
+                    s.commit()
+                    return None
+                existing.source_job_id=item.source_job_id; existing.date_posted=item.date_posted; existing.last_seen_at=datetime.now(timezone.utc); existing.url=item.url; existing.application_url=item.application_url; existing.description=item.description; existing.score=score; existing.match_reasons=reasons; existing.warnings=warnings; existing.raw_metadata={**item.raw_metadata,'reposted':True,'source_provenance':[self._provenance(item)]}; existing.status=JobStatus.NEW.value; existing.notification_state='PENDING'
                 s.commit(); return existing
-            job=Job(fingerprint=item.fingerprint,source=item.source,source_job_id=item.source_job_id,title=item.title,company=item.company,location=item.location,work_setup=item.work_setup,description=item.description,url=item.url,application_url=item.application_url,application_email=item.application_email,salary=item.salary,date_posted=item.date_posted,employment_type=item.employment_type,seniority=item.seniority,skills=extract_skills(item),raw_metadata=item.raw_metadata,score=score,match_reasons=reasons,warnings=warnings)
+            # A same-company/title/location collision without matching source
+            # evidence is a genuinely distinct vacancy. Keep its broad bucket
+            # in ``identity_key`` but use the stable source-aware token for
+            # the unique storage fingerprint.
+            stored_fingerprint=item.fingerprint if not candidates else item.dedup_token
+            job=Job(fingerprint=stored_fingerprint,identity_key=identity_key,source=item.source,source_job_id=item.source_job_id,title=item.title,company=item.company,location=item.location,work_setup=item.work_setup,description=item.description,url=item.url,application_url=item.application_url,application_email=item.application_email,salary=item.salary,date_posted=item.date_posted,last_seen_at=datetime.now(timezone.utc),employment_type=item.employment_type,seniority=item.seniority,skills=extract_skills(item),raw_metadata={**(item.raw_metadata or {}),'source_provenance':[self._provenance(item)]},score=score,match_reasons=reasons,warnings=warnings)
             s.add(job)
             try: s.commit(); return job
             except IntegrityError: s.rollback(); return None
@@ -159,10 +269,14 @@ class Repository:
             item=s.get(SourceHealth,source)
             if not item: item=SourceHealth(source=source); s.add(item); s.commit()
             return item
-    def health_success(self, source, jobs, baseline=False):
+    def health_success(self, source, jobs, baseline=False, status='healthy', error=None, raw_jobs=None, normalized_jobs=None, accepted_jobs=None):
         with self.sessions() as s:
             item=s.get(SourceHealth,source) or SourceHealth(source=source); s.add(item)
-            item.last_checked_at=item.last_success_at=datetime.now(timezone.utc); item.last_job_count=jobs; item.consecutive_failures=0; item.last_error=None; item.status='healthy'; item.baseline_initialized=baseline or item.baseline_initialized; s.commit()
+            item.last_checked_at=item.last_success_at=datetime.now(timezone.utc); item.last_job_count=jobs
+            item.last_raw_jobs=jobs if raw_jobs is None else raw_jobs
+            item.last_normalized_jobs=jobs if normalized_jobs is None else normalized_jobs
+            item.last_accepted_jobs=jobs if accepted_jobs is None else accepted_jobs
+            item.consecutive_failures=0; item.last_error=error; item.status=status; item.baseline_initialized=baseline or item.baseline_initialized; s.commit()
     def health_failure(self, source, error):
         with self.sessions() as s:
             item=s.get(SourceHealth,source) or SourceHealth(source=source); s.add(item)
@@ -196,14 +310,23 @@ class Repository:
                 s.commit(); return False
             state.value=str(used+requested); s.commit(); return True
     def expire_stale_jobs(self):
-        cutoff=datetime.now(timezone.utc)-timedelta(days=30)
+        # The active discovery policy deliberately retains dated postings for
+        # 0-90 days. A listing rediscovered today is not "new", but a 31-90
+        # day listing remains eligible at lower priority.
+        cutoff=datetime.now(timezone.utc)-timedelta(days=90)
         with self.sessions() as s:
             rows=s.query(Job).filter(Job.date_posted.is_not(None),Job.date_posted<cutoff,Job.status.notin_([JobStatus.APPLIED.value,JobStatus.OFFER.value,JobStatus.REJECTED.value])).all()
             for job in rows: job.status=JobStatus.EXPIRED.value
             s.commit(); return len(rows)
     def by_fingerprint(self, fingerprint: str) -> Job | None:
         with self.sessions() as s:
-            return s.scalar(select(Job).where(Job.fingerprint==fingerprint))
+            return s.scalar(select(Job).where(Job.fingerprint==fingerprint)) or s.scalar(select(Job).where(Job.identity_key==fingerprint))
+    def by_item(self, item: NormalizedJob) -> Job | None:
+        with self.sessions() as s:
+            candidates=s.scalars(select(Job).where(Job.identity_key==self._identity_key(item))).all()
+            if not candidates:
+                candidates=s.scalars(select(Job).where(Job.fingerprint==item.fingerprint)).all()
+            return next((candidate for candidate in candidates if self._same_vacancy(candidate,item)), None)
     def state(self, key: str, default=None):
         with self.sessions() as s:
             item=s.get(AppState,key)
@@ -393,9 +516,9 @@ class Discord:
         def stamp(value):
             if not value: return '—'
             return datetime.fromisoformat(value).astimezone(ZoneInfo('Asia/Manila')).strftime('%I:%M %p')
-        sources=scheduler_state.get('sources_working',0); linked=scheduler_state.get('linkedin_status','DISABLED'); jobstreet=scheduler_state.get('jobstreet_status','DISABLED'); phase=scheduler_state.get('phase','complete')
+        sources=scheduler_state.get('sources_working',0); linked=scheduler_state.get('linkedin_status','DISABLED'); indeed=scheduler_state.get('indeed_status','STARTING'); google=scheduler_state.get('google_jobs_status','STARTING'); jobstreet=scheduler_state.get('jobstreet_status','DISABLED'); phase=scheduler_state.get('phase','complete')
         system=f"Service\nONLINE\n\nScheduler\n{scheduler_state.get('status','RUNNING').upper()}\n\nLast scan\n{stamp(scheduler_state.get('last_poll_at'))}\n\nNext scan\n{stamp(scheduler_state.get('next_poll_at'))}\n\nNext batch\n{max(0,scheduler_state.get('seconds_until_next_poll',0))//60} minutes"
-        sources_text=f"Sources\n{sources} active\n\nLinkedIn\n{linked}\n\nJobStreet\n{jobstreet}\n\nDatabase\nCONNECTED\n\nDiscord\nCONNECTED"
+        sources_text=f"Sources\n{sources} active\n\nIndeed PH\n{indeed}\n\nGoogle Jobs\n{google}\n\nLinkedIn\n{linked}\n\nJobStreet\n{jobstreet}\n\nDatabase\nCONNECTED\n\nDiscord\nCONNECTED"
         scan_text='Checking recent active jobs…' if phase=='scanning' else f"Jobs checked: {scheduler_state.get('jobs_checked',0)}\nRecent PH tech jobs: {scheduler_state.get('recent_jobs_found',0)}\nNew qualifying jobs: {scheduler_state.get('new_recent_jobs',0)}\nAlerts sent: {scheduler_state.get('alerts_sent',0)}\nDuplicates ignored: {scheduler_state.get('duplicates_ignored',0)}"
         payload={'embeds':[{'title':'𝐀𝐅𝐓𝐄𝐑 𝐇𝐎𝐔𝐑𝐒 𝐉𝐎𝐁 𝐇𝐔𝐍𝐓𝐄𝐑','description':'Your automated Philippine tech-job monitor is online.','color':0xF59E0B,'fields':[{'name':'𝐒𝐘𝐒𝐓𝐄𝐌 𝐒𝐓𝐀𝐓𝐔𝐒','value':system,'inline':True},{'name':'𝐂𝐎𝐍𝐍𝐄𝐂𝐓𝐈𝐎𝐍𝐒','value':sources_text,'inline':True},{'name':'𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆 𝐍𝐎𝐖' if phase=='scanning' else '𝐒𝐂𝐀𝐍 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄','value':scan_text,'inline':False},{'name':'𝐇𝐎𝐖 𝐓𝐎 𝐔𝐒𝐄','value':'Auto scanning runs every 15 minutes. Use v!search for a specific role, v!latest for stored jobs, v!status for health, or v!scan for one protected immediate batch.','inline':False}],'footer':{'text':'After Hours Job Hunter • Made by masoncalix'}}]}
         existing=repo.state('discord_control_panel_message_id') or repo.state('discord_status_message_id')
@@ -476,41 +599,59 @@ class Pipeline:
     async def run_source(self,source):
         run=await asyncio.to_thread(self.repo.run_start,source.name); discovered=new=filtered=0
         pages_fetched=0
-        raw_jobs_discovered=normalized_jobs=jobs_0_90=computer_related=entry_level_compatible=duplicates_removed=0
+        raw_jobs_discovered=normalized_jobs=jobs_0_90=ph_remote_ph=computer_related=entry_level_compatible=qualifying=duplicates_removed=0
         succeeded=False
         try:
-            for attempt in range(3):
+            max_attempts=max(1,int(getattr(source,'max_fetch_attempts',3) or 3))
+            for attempt in range(max_attempts):
                 try: items=await source.fetch(); break
                 except Exception:
-                    if attempt==2: raise
+                    if attempt==max_attempts-1: raise
                     await asyncio.sleep(2**attempt)
             pages_fetched=int(getattr(source,'pages_fetched',1) or 1)
-            raw_jobs_discovered=len(items); normalized_jobs=len(items)
+            raw_jobs_discovered=int(getattr(source,'raw_jobs_discovered',len(items)) or 0)
+            normalized_jobs=int(getattr(source,'normalized_jobs',len(items)) or 0)
             now=datetime.now(timezone.utc)
             for item in items:
-                if is_active_listing(item):
-                    _,_,in_window=freshness(item,now)
-                    if in_window:
-                        jobs_0_90 += 1
-                    score,_,warnings,relevant=evaluate(item,now)
-                    if relevant:
-                        computer_related += 1
-                        if not any(
-                            warning.startswith('Senior-level') or warning.startswith('Requires')
-                            for warning in warnings
-                        ) and score >= 0:
-                            entry_level_compatible += 1
-            seen_fingerprints=set()
+                if not is_active_listing(item):
+                    continue
+                _,_,in_window=freshness(item,now)
+                if not in_window:
+                    continue
+                jobs_0_90 += 1
+                if not is_ph_location(item):
+                    continue
+                ph_remote_ph += 1
+                score,_,warnings,_profile_eligible=evaluate(item,now)
+                # "Tech related" precedes the seniority stage in the
+                # observable funnel. A Senior DevOps role is still technical;
+                # it is counted here and removed only from entry-level
+                # compatibility/qualification below.
+                technical=not any(warning.startswith('Role is outside') for warning in warnings)
+                if not technical:
+                    continue
+                computer_related += 1
+                if not any(
+                    warning.startswith('Senior-level') or warning.startswith('Requires')
+                    for warning in warnings
+                ) and score >= 0:
+                    entry_level_compatible += 1
+            seen_fingerprints=set(); unique_items=[]
             for item in items:
-                if item.fingerprint in seen_fingerprints:
+                if item.dedup_token in seen_fingerprints:
                     duplicates_removed += 1
-                seen_fingerprints.add(item.fingerprint)
+                    continue
+                seen_fingerprints.add(item.dedup_token)
+                unique_items.append(item)
             health=await asyncio.to_thread(self.repo.health,source.name)
             baseline=not health.baseline_initialized
-            ordered=sorted(items,key=lambda x:evaluate(x)[0],reverse=True)
+            ordered=sorted(unique_items,key=lambda x:evaluate(x)[0],reverse=True)
             baseline_candidates=[]
             for item in ordered:
                 discovered+=1; job,accepted=await self.process(item,notify=not baseline); filtered+=not accepted; new+=job is not None
+                qualifying += int(accepted)
+                if accepted and job is None:
+                    duplicates_removed += 1
                 if baseline and job and job.score>=self.config.min_notify_score: baseline_candidates.append(job)
             if baseline:
                 for job in baseline_candidates:
@@ -519,7 +660,19 @@ class Pipeline:
                     if not allowed: break
                     await self.notify(job)
             await asyncio.to_thread(self.repo.run_finish,run,success=True,discovered=discovered,new_jobs=new,filtered=filtered)
-            await asyncio.to_thread(self.repo.health_success,source.name,discovered,baseline=True)
+            status='degraded' if getattr(source,'degraded',False) else 'healthy'
+            await asyncio.to_thread(
+                self.repo.health_success, source.name, discovered, baseline=True,
+                status=status, error=getattr(source,'last_error_category',None),
+                raw_jobs=raw_jobs_discovered, normalized_jobs=normalized_jobs,
+                accepted_jobs=qualifying,
+            )
+            if source.name.startswith('jobspy:'):
+                log.info(
+                    'jobspy_source_funnel source=%s raw=%s normalized=%s days_0_90=%s ph_remote_ph=%s tech=%s entry_level=%s duplicates=%s new_unique=%s qualifying=%s status=%s',
+                    source.name,raw_jobs_discovered,normalized_jobs,jobs_0_90,ph_remote_ph,
+                    computer_related,entry_level_compatible,duplicates_removed,new,qualifying,status,
+                )
             succeeded=True
         except Exception as e:
             await asyncio.to_thread(self.repo.run_finish,run,success=False,error=str(e)); log.warning('source_failed',extra={'source':source.name,'error':str(e)})
@@ -527,7 +680,8 @@ class Pipeline:
         return {
             'source':source.name,'discovered':discovered,'new':new,'filtered':filtered,
             'success': succeeded,'pages_fetched':pages_fetched,'raw_jobs_discovered':raw_jobs_discovered,
-            'normalized_jobs':normalized_jobs,'jobs_0_90':jobs_0_90,
+            'normalized_jobs':normalized_jobs,'jobs_0_90':jobs_0_90,'ph_remote_ph':ph_remote_ph,
             'computer_related':computer_related,'entry_level_compatible':entry_level_compatible,
+            'qualifying':qualifying,
             'duplicates_removed':duplicates_removed,
         }

@@ -49,7 +49,7 @@ async def test_progress_counts_are_a_real_recent_query_entry_match_funnel(tmp_pa
             ]
 
     monkeypatch.setattr("src.manual_search.configured_sources", lambda _targets: [FunnelSource()])
-    cfg = Settings(database_url=f"sqlite:///{tmp_path}/funnel.db", brightdata_enabled=False)
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/funnel.db", brightdata_enabled=False, jobspy_enabled=False)
     repo = Repository(cfg.database_url)
     repo.create_schema()
 
@@ -80,7 +80,7 @@ async def test_cached_outcome_is_explicit_and_emits_cached_progress(tmp_path, mo
             return [job("Junior Software Developer", "Cache Co", "Fresh graduate AWS Docker Linux", posted=now)]
 
     monkeypatch.setattr("src.manual_search.configured_sources", lambda _targets: [OneSource()])
-    cfg = Settings(database_url=f"sqlite:///{tmp_path}/cache.db", brightdata_enabled=False)
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/cache.db", brightdata_enabled=False, jobspy_enabled=False)
     repo = Repository(cfg.database_url)
     repo.create_schema()
     search = ManualJobSearch(cfg, repo)
@@ -105,7 +105,7 @@ async def test_cached_outcome_is_explicit_and_emits_cached_progress(tmp_path, mo
 @pytest.mark.asyncio
 async def test_zero_result_alternatives_are_explicitly_separate_stored_30_day_pool(tmp_path, monkeypatch):
     monkeypatch.setattr("src.manual_search.configured_sources", lambda _targets: [])
-    cfg = Settings(database_url=f"sqlite:///{tmp_path}/alternatives.db", brightdata_enabled=False)
+    cfg = Settings(database_url=f"sqlite:///{tmp_path}/alternatives.db", brightdata_enabled=False, jobspy_enabled=False)
     repo = Repository(cfg.database_url)
     repo.create_schema()
     now = datetime.now(timezone.utc)

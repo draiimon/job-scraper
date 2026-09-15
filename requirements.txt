@@ -11,3 +11,4 @@ pymupdf==1.28.2
 python-multipart==0.0.32
 playwright==1.62.0
 cryptography==45.0.6
+python-jobspy==1.1.82

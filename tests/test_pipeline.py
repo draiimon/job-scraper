@@ -224,7 +224,7 @@ def test_new_source_id_with_newer_timestamp_is_a_repost(tmp_path):
 
 @pytest.mark.asyncio
 async def test_manual_find_keeps_only_recent_ph_tech_jobs(tmp_path):
-    cfg=Settings(database_url=f'sqlite:///{tmp_path}/manual.db',brightdata_enabled=True,brightdata_api_token='token')
+    cfg=Settings(database_url=f'sqlite:///{tmp_path}/manual.db',brightdata_enabled=True,brightdata_api_token='token',jobspy_enabled=False)
     repo=Repository(cfg.database_url); repo.create_schema(); search=ManualJobSearch(cfg,repo)
     async def reply(_input,_limit):
         return [

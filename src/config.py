@@ -68,6 +68,19 @@ class Settings(BaseSettings):
     # the advertised free allowance unless the operator explicitly changes it.
     brightdata_jobstreet_monthly_page_limit: int = 250
     brightdata_linkedin_monthly_request_limit: int = 100
+    # JobSpy is limited to public Indeed Philippines and Google Jobs discovery.
+    # It has a provider-specific interval so the global 15-minute scheduler
+    # does not repeatedly hammer either board.
+    jobspy_enabled: bool = True
+    jobspy_indeed_enabled: bool = True
+    jobspy_google_enabled: bool = True
+    jobspy_results_per_query: int = 12
+    jobspy_queries_per_cycle: int = 4
+    jobspy_request_concurrency: int = 2
+    jobspy_min_interval_seconds: int = 3600
+    jobspy_manual_min_interval_seconds: int = 900
+    jobspy_max_age_days: int = 90
+    jobspy_scan_timeout_seconds: int = 75
     jobstreet_session_path: str = "data/private/jobstreet_session.json"
     # Optional Render secret: base64-encoded Playwright storage state created
     # locally through `python -m src.jobstreet_auth`. Never log this value.
