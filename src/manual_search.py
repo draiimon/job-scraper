@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import Awaitable, Callable
 
@@ -19,6 +19,14 @@ from .jobstreet_link import connection_status, has_managed_connection
 ProgressCallback = Callable[["SearchProgress"], Awaitable[None]]
 
 
+# A zero-result targeted search may offer useful alternatives, but those
+# alternatives must never be represented as exact search results.  Keeping the
+# pool identity here gives every caller one honest, reusable label.
+STORED_ALTERNATIVE_POOL_DAYS = 30
+STORED_ALTERNATIVE_POOL = "stored_30_day_profile_qualified_alternatives"
+STORED_ALTERNATIVE_POOL_LABEL = "Stored profile-qualified alternatives from the last 30 days"
+
+
 @dataclass
 class SearchProgress:
     sources_total: int = 0
@@ -30,6 +38,20 @@ class SearchProgress:
     potential_matches: int = 0
     live_attempted: bool = False
     live_available: bool = False
+    # This is intentionally separate from ``live_available``.  A cached
+    # response can contain results previously obtained from live sources, but
+    # this invocation did not make a new external request.
+    cached_only: bool = False
+
+
+@dataclass(frozen=True)
+class StoredAlternatives:
+    """Transparent metadata for non-exact, stored fallback suggestions."""
+
+    jobs: list
+    pool: str = STORED_ALTERNATIVE_POOL
+    window_days: int = STORED_ALTERNATIVE_POOL_DAYS
+    label: str = STORED_ALTERNATIVE_POOL_LABEL
 
 
 @dataclass
@@ -39,6 +61,9 @@ class SearchOutcome:
     duration_seconds: float
     cached_only: bool = False
     errors: list[str] = field(default_factory=list)
+    # These are deliberately distinct from ``jobs``.  ``jobs`` matched the
+    # user's requested role; alternatives came from a stored 30-day pool.
+    alternatives: StoredAlternatives | None = None
 
 
 class ManualJobSearch:
@@ -127,30 +152,63 @@ class ManualJobSearch:
         if callback:
             await callback(progress)
 
-    def _accept(self, item: NormalizedJob, role: str, cutoff: datetime, min_score: int, entry_level_only: bool, work_setup: str):
-        score, reasons, warnings, relevant = evaluate(item)
-        text = f"{item.title} {item.description}".lower()
+    @staticmethod
+    def _is_recent_active_ph(item: NormalizedJob, cutoff: datetime) -> bool:
+        """Shared first stage for both reporting and actual acceptance.
+
+        ``freshness`` normalizes naive source timestamps itself, while this
+        helper also normalizes before comparing against the requested cutoff.
+        That avoids a naive/aware datetime error from one malformed source
+        changing the reporting funnel.
+        """
         posted = item.date_posted
         if posted and posted.tzinfo is None:
             posted = posted.replace(tzinfo=timezone.utc)
-        if not (is_ph_location(item) and posted and posted >= cutoff and freshness(item)[2] and relevant and score >= min_score):
+        return bool(
+            is_ph_location(item)
+            and posted
+            and posted >= cutoff
+            and freshness(item)[2]
+        )
+
+    @staticmethod
+    def _is_technology_relevant(warnings: list[str]) -> bool:
+        """Use the central evaluator's classification without seniority.
+
+        A senior DevOps listing is still query-relevant, but should fall out at
+        the subsequent entry-level stage.  This is what makes the visible
+        counts a meaningful funnel rather than four unrelated totals.
+        """
+        return not any(
+            warning.startswith("Role is outside")
+            for warning in warnings
+        )
+
+    @staticmethod
+    def _is_entry_level_compatible(warnings: list[str]) -> bool:
+        return not any(
+            warning.startswith("Senior-level") or warning.startswith("Requires")
+            for warning in warnings
+        )
+
+    def _accept(self, item: NormalizedJob, role: str, cutoff: datetime, min_score: int, entry_level_only: bool, work_setup: str):
+        score, reasons, warnings, relevant = evaluate(item)
+        text = f"{item.title} {item.description}".lower()
+        if not (self._is_recent_active_ph(item, cutoff) and relevant and score >= min_score):
             return None
         if not self._matches_query(item, role):
             return None
         # Use the central seniority classifier rather than a raw substring
         # check.  A junior listing can legitimately mention a hiring manager,
         # project manager, or manager-facing workflow in its description.
-        if entry_level_only and any(
-            warning.startswith("Senior-level") or warning.startswith("Requires")
-            for warning in warnings
-        ):
+        if entry_level_only and not self._is_entry_level_compatible(warnings):
             return None
         if work_setup and work_setup.lower() not in text and work_setup.lower() not in item.location.lower():
             return None
         return score, reasons, warnings
 
-    def suggested_recent_jobs(self, role: str, limit: int = 3) -> list:
-        """Return stored alternatives without silently starting another live scan.
+    def suggested_stored_alternatives(self, role: str, limit: int = 3) -> StoredAlternatives:
+        """Return a clearly identified 30-day *stored* alternative pool.
 
         A zero-result search should still be useful, but these are explicitly
         profile-qualified alternatives rather than pretending they matched the
@@ -159,7 +217,7 @@ class ManualJobSearch:
         """
         from .models import Job, JobStatus
 
-        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=STORED_ALTERNATIVE_POOL_DAYS)
         blocked = {
             JobStatus.EXPIRED.value,
             JobStatus.IGNORED.value,
@@ -187,7 +245,18 @@ class ManualJobSearch:
 
         ranked = [(value, job) for job in candidates if (value := rank(job)) is not None]
         ranked.sort(key=lambda item: item[0], reverse=True)
-        return [job for _value, job in ranked[: max(1, min(int(limit), 3))]]
+        return StoredAlternatives(
+            jobs=[job for _value, job in ranked[: max(1, min(int(limit), 3))]]
+        )
+
+    def suggested_recent_jobs(self, role: str, limit: int = 3) -> list:
+        """Compatibility wrapper for callers that only need the jobs list.
+
+        New callers should use :meth:`suggested_stored_alternatives` and show
+        its label, so there is no ambiguity between exact live results and the
+        separate stored fallback pool.
+        """
+        return self.suggested_stored_alternatives(role, limit).jobs
 
     async def find_with_progress(self, role: str, location="Philippines", freshness_text="Past 24 hours", remote="", limit=10, work_setup="", min_score=0, entry_level_only=True, source_filter="all", progress_callback: ProgressCallback | None = None) -> SearchOutcome:
         started = time.monotonic()
@@ -199,7 +268,18 @@ class ManualJobSearch:
         cached = self.cache.get(key)
         if cached and cached[0] > time.time():
             outcome = cached[1]
-            return SearchOutcome(outcome.jobs[:limit], outcome.progress, time.monotonic() - started, cached_only=True, errors=outcome.errors)
+            # Do not mutate the canonical cached progress object: a later
+            # non-cached consumer must not be told its live scan was cached.
+            cached_progress = replace(outcome.progress, cached_only=True)
+            await self._emit(progress_callback, cached_progress)
+            return SearchOutcome(
+                outcome.jobs[:limit],
+                cached_progress,
+                time.monotonic() - started,
+                cached_only=True,
+                errors=list(outcome.errors),
+                alternatives=outcome.alternatives,
+            )
 
         cutoff = datetime.now(timezone.utc) - timedelta(days=age)
         progress = SearchProgress()
@@ -209,16 +289,22 @@ class ManualJobSearch:
         async def consume(items: list[NormalizedJob]):
             for item in items:
                 progress.jobs_reviewed += 1
-                if is_ph_location(item) and item.date_posted and item.date_posted >= cutoff:
-                    progress.recent_ph_jobs += 1
-                score, _reasons, warnings, relevant = evaluate(item)
-                if relevant and self._matches_query(item, role):
-                    progress.query_relevant_jobs += 1
-                if relevant and not any(
-                    warning.startswith("Senior-level") or warning.startswith("Requires")
-                    for warning in warnings
-                ):
-                    progress.entry_level_compatible += 1
+                # The visible counters intentionally form a real funnel:
+                # recent/active PH -> requested technical role -> entry level
+                # -> every remaining user-selected constraint.
+                if not self._is_recent_active_ph(item, cutoff):
+                    continue
+                progress.recent_ph_jobs += 1
+
+                score, _reasons, warnings, _accepted_by_profile = evaluate(item)
+                if not (self._is_technology_relevant(warnings) and self._matches_query(item, role)):
+                    continue
+                progress.query_relevant_jobs += 1
+
+                if not self._is_entry_level_compatible(warnings):
+                    continue
+                progress.entry_level_compatible += 1
+
                 result = self._accept(item, role, cutoff, min_score, entry_level_only, work_setup)
                 if not result:
                     continue
@@ -323,7 +409,18 @@ class ManualJobSearch:
                 -(job.date_posted.timestamp() if job.date_posted else 0),
             ),
         )[:limit]
-        outcome = SearchOutcome(jobs, progress, time.monotonic() - started, errors=errors)
+        alternatives = None
+        if not jobs:
+            # This is a distinct pool, not a second hidden live scan and not
+            # an exact role match.  Callers can label it truthfully.
+            alternatives = await asyncio.to_thread(self.suggested_stored_alternatives, role, 3)
+        outcome = SearchOutcome(
+            jobs,
+            progress,
+            time.monotonic() - started,
+            errors=errors,
+            alternatives=alternatives,
+        )
         self.cache[key] = (time.time() + 300, outcome)
         return outcome
 

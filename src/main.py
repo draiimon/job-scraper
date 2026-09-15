@@ -21,7 +21,7 @@ from .jobstreet_link import (
 )
 from .services import Pipeline, Repository
 from .sources import configured_sources
-from .applications import eligible_for_email, write_package, revised_cover_letter
+from .applications import eligible_for_email, write_package, generate_cover_letter, cover_letter_metadata
 from .ai import gemini
 from .security import ActionTokens
 from .brightdata import brightdata_sources
@@ -33,6 +33,7 @@ logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)
 cfg=settings(); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
 manual_search=ManualJobSearch(cfg,repo)
 poll_lock=asyncio.Lock()
+cover_letter_locks: dict[int, asyncio.Lock] = {}
 def iso(value): return value.astimezone(timezone.utc).isoformat()
 def scheduler_snapshot():
     saved=repo.state('scheduler',{}) or {}
@@ -49,6 +50,22 @@ async def poll_once(manual=False):
     async with poll_lock:
         started=datetime.now(timezone.utc)
         previous=repo.state('scheduler',{}) or {}
+        if not manual:
+            # A manual scan may finish just after the automatic deadline while
+            # this coroutine is waiting on ``poll_lock``. Do not immediately
+            # run the same full batch twice and spend another set of source
+            # requests; advance the normal cadence from the completed scan.
+            try:
+                deadline=datetime.fromisoformat(previous.get('next_poll_at',''))
+                last_scan=datetime.fromisoformat(previous.get('last_poll_at',''))
+                if deadline.tzinfo is None: deadline=deadline.replace(tzinfo=timezone.utc)
+                if last_scan.tzinfo is None: last_scan=last_scan.replace(tzinfo=timezone.utc)
+            except (TypeError,ValueError):
+                deadline=last_scan=None
+            if deadline and last_scan and deadline <= started and last_scan >= deadline and started-last_scan <= timedelta(minutes=5):
+                skipped={**previous,'status':'running','phase':'complete','next_poll_at':iso(started+timedelta(seconds=cfg.poll_interval_seconds))}
+                repo.set_state('scheduler',skipped)
+                return []
         scheduled_next=previous.get('next_poll_at') if manual else None
         if not scheduled_next: scheduled_next=iso(started+timedelta(seconds=cfg.poll_interval_seconds))
         repo.set_state('scheduler',{'status':'running','phase':'scanning','last_poll_at':iso(started),'next_poll_at':scheduled_next,'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0})
@@ -291,17 +308,11 @@ def jobstreet_connection_status(token: str):
         raise HTTPException(403, 'invalid, expired, or already-used connection link')
     return {'status': 'READY' if request.status == 'COMPLETE' else 'WAITING FOR USER LOGIN'}
 
-def resume_upload_link():
-    token=ActionTokens(cfg).issue_control('resume')
-    return f'/resume/{token}' if token else None
-
 @app.get('/resume',response_class=HTMLResponse)
 def resume_status_page():
     info=repo.resume_info()
-    link=resume_upload_link()
     current=f'<p><strong>Saved resume:</strong> {escape(info["filename"])}<br><strong>Uploaded:</strong> {escape(str(info["uploaded_at"]))}</p>' if info else '<p>No resume is saved in the database yet.</p>'
-    upload=f'<p><a href="{link}">Open secure resume upload</a></p>' if link else '<p>Set APP_SECRET_KEY to enable secure resume uploads.</p>'
-    return HTMLResponse(f'<!doctype html><title>Resume</title><h1>Resume context</h1>{current}<p>The saved PDF and extracted text are used when generating cover letters. Uploading a new PDF replaces the saved resume and clears cached letters.</p>{upload}<p><a href="/">Back to job hunter</a></p>')
+    return HTMLResponse(f'<!doctype html><title>Resume</title><h1>Resume context</h1>{current}<p>The saved PDF and extracted text are used when generating cover letters. For security, resume upload links are issued privately through the bot owner command only.</p><p><a href="/">Back to job hunter</a></p>')
 
 @app.get('/resume/{token}',response_class=HTMLResponse)
 def resume_upload_page(token:str):
@@ -429,6 +440,31 @@ class DiscordSearchResults(BaseModel): jobs: list[int]
 @app.post('/search/discord')
 async def send_search_results(request: DiscordSearchResults):
     raise HTTPException(410,'Discord search results are delivered by v!search')
+
+
+async def canonical_cover_letter(job_id: int, regenerate: bool = False):
+    """Persist one active cover-letter version before any legacy package export."""
+    lock=cover_letter_locks.setdefault(job_id,asyncio.Lock())
+    async with lock:
+        def load():
+            with repo.sessions() as s:
+                return s.get(Job, job_id)
+        job = await asyncio.to_thread(load)
+        if not job:
+            raise HTTPException(404, 'job not found')
+        result = await generate_cover_letter(job, use_ai=True, regenerate=regenerate, resume_text=repo.resume_text())
+        def save():
+            with repo.sessions() as s:
+                stored=s.get(Job, job_id)
+                if not stored:
+                    return None
+                stored.raw_metadata=cover_letter_metadata(stored.raw_metadata, result)
+                s.commit()
+                return stored
+        stored=await asyncio.to_thread(save)
+        if not stored:
+            raise HTTPException(404, 'job not found')
+        return stored, result
 @app.get('/latest')
 def latest_jobs(limit:int=10):
     with repo.sessions() as s:
@@ -447,14 +483,11 @@ def update_status(job_id:int, update:StatusUpdate):
         job.status=update.status.value; s.commit(); return job
 @app.post('/jobs/{job_id}/prepare-application')
 async def prepare_application(job_id:int):
-    with repo.sessions() as s:
-        job=s.get(Job,job_id)
-        if not job: raise HTTPException(404,'job not found')
-        # File generation is intentionally separate from sending; OAuth email sending remains opt-in.
-        resume=repo.resume_record()
-        letter=await revised_cover_letter(job,repo.resume_text())
-        path=write_package(job,letter=letter,resume_bytes=resume['file_data'] if resume else None,resume_filename=resume['filename'] if resume else None); eligible,reason=eligible_for_email(job,cfg.min_auto_application_score)
-        return {'path':str(path),'email_eligible':eligible,'reason':reason,'auto_send_enabled':cfg.auto_send_email_applications}
+    job, result=await canonical_cover_letter(job_id)
+    # File generation is intentionally separate from sending; OAuth email sending remains opt-in.
+    resume=repo.resume_record()
+    path=write_package(job,letter=result.text,resume_bytes=resume['file_data'] if resume else None,resume_filename=resume['filename'] if resume else None); eligible,reason=eligible_for_email(job,cfg.min_auto_application_score)
+    return {'path':str(path),'generation_method':result.method,'email_eligible':eligible,'reason':reason,'auto_send_enabled':cfg.auto_send_email_applications}
 def action_job(token:str):
     payload=ActionTokens(cfg).verify(token)
     if not payload: raise HTTPException(403,'invalid or expired action link')
@@ -473,9 +506,10 @@ def action_page(token:str):
 async def action_post(token:str):
     payload,job=action_job(token); action=payload['a']
     if action=='generate':
+        stored,result=await canonical_cover_letter(job.id,regenerate=True)
         resume=repo.resume_record()
-        letter=await revised_cover_letter(job,repo.resume_text()); path=write_package(job,letter=letter,resume_bytes=resume['file_data'] if resume else None,resume_filename=resume['filename'] if resume else None)
-        return {'result':'cover letter generated','path':str(path)}
+        path=write_package(stored,letter=result.text,resume_bytes=resume['file_data'] if resume else None,resume_filename=resume['filename'] if resume else None)
+        return {'result':'cover letter generated','generation_method':result.method,'path':str(path)}
     if action in {'applied','saved','ignored'}:
         status={'applied':'APPLIED','saved':'SAVED','ignored':'IGNORED'}[action]
         repo.set_job_status(job.id,status,f'{status.title()} from signed action.')

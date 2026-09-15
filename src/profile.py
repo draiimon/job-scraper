@@ -4,10 +4,31 @@ from pathlib import Path
 from .config import settings
 from .jobs import SKILLS
 
+
+PUBLIC_PROFILE_PATH = Path("config/candidate_public_profile.json")
+
+
+def _profile_file(path: Path) -> dict:
+    try:
+        value=json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value,dict) else {}
+
+
 def profile() -> dict:
     path=Path(settings().profile_path)
-    if path.exists(): return json.loads(path.read_text(encoding='utf-8'))
-    return {'skills':[], 'projects':[], 'summary':''}
+    # Public links are safe to ship with this single-user app; private resume
+    # facts remain in the database or ignored profile file. Merge rather than
+    # replace so an absent local file never drops the canonical public URLs.
+    public=_profile_file(PUBLIC_PROFILE_PATH)
+    private=_profile_file(path)
+    merged={**public,**private}
+    public_contact=public.get('contact') if isinstance(public.get('contact'),dict) else {}
+    private_contact=private.get('contact') if isinstance(private.get('contact'),dict) else {}
+    if public_contact or private_contact:
+        merged['contact']={**public_contact,**private_contact}
+    return merged or {'skills':[], 'projects':[], 'summary':''}
 
 def relevant_facts(description: str, resume_text: str | None = None) -> tuple[list[str], list[dict]]:
     data=profile(); text=description.lower()

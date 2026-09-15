@@ -30,7 +30,7 @@ v!resume
 v!help
 ```
 
-The persistent control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW ALL JOBS`, `VIEW STATUS`, `HELP`, and `UPLOAD RESUME` when signed links are configured. `v!viewall` and `v!view all` provide the same compact, paginated Discord job board, using stored results only. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`.
+The persistent control panel provides `SCAN NOW`, `SEARCH JOBS`, `VIEW LATEST JOBS`, `VIEW ALL JOBS`, `VIEW STATUS`, `JOBSTREET`, and `HELP`. `v!viewall` and `v!view all` provide the same compact, paginated Discord job board, using stored results only. Job cards provide `VIEW JOB`, `APPLY NOW`, `SAVE`, and `SKIP`. Configure `DISCORD_OWNER_ID` for a personal server (or use the server owner fallback) so private resume/application actions stay private.
 
 `APPLY NOW` opens an internal review flow. It can prepare a truthful cover letter and show the configured resume before an explicit send confirmation. Live sending is not implemented; dry-run mode is enabled by default. Only `VIEW JOB` and the employer's application URL open external pages.
 
@@ -42,7 +42,7 @@ If the bot is not configured or temporarily unavailable, set `DISCORD_WEBHOOK_UR
 
 The active resume is stored in the database as one private record containing the PDF bytes, filename, upload time, and extracted text. Cover-letter drafts use that extracted text as their factual source, so the application flow can reference real experience and projects instead of an untracked local file. Gemini, when enabled, receives redacted resume context and is instructed not to add claims.
 
-Open `GET /resume` for the current resume status and a short-lived signed upload link. The link accepts PDF files up to 10 MB. Uploading a replacement updates the active record, clears cached cover letters, and includes the new PDF in newly generated application packages. Discord users can type `v!resume` or use `UPLOAD RESUME`.
+`GET /resume` is status-only. The owner can type `v!resume` to receive a short-lived signed upload link by DM. The link accepts PDF files up to 10 MB. Uploading a replacement updates the active record, clears cached cover letters, and includes the new PDF in newly generated application packages.
 
 ## Local setup
 

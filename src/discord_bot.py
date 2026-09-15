@@ -40,7 +40,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
     except ImportError:
         log.error('discord_bot_dependency_missing'); return
     intents=discord.Intents.default(); intents.message_content=True
-    bot=discord.Client(intents=intents); panel_channel=None; panel_view=None; panel_task=None; scan_task=None; registered=False; search_cooldowns={}; active_searches=set(); processed_messages={}; lease_task=None
+    bot=discord.Client(intents=intents); panel_channel=None; panel_view=None; panel_task=None; scan_task=None; registered=False; search_cooldowns={}; active_searches=set(); processed_messages={}; lease_task=None; letter_locks={}; panel_refresh_lock=asyncio.Lock()
     # A token can only have one useful gateway consumer.  The shared database
     # lease prevents a local dev server from replying alongside Render.
     instance_id=f"{os.getenv('RENDER_SERVICE_ID') or socket.gethostname()}-{uuid.uuid4().hex[:10]}"
@@ -64,37 +64,65 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         async with indicator():
             yield
 
-    def search_embed(role, progress, title='𝐒𝐄𝐀𝐑𝐂𝐇𝐈𝐍𝐆', detail=''):
+    def is_private_owner(user_id, guild=None) -> bool:
+        """This is a personal job hunter: resume and application state stay private."""
+        configured=str(getattr(cfg,'discord_owner_id',None) or '').strip()
+        if configured:
+            return str(user_id)==configured
+        guild_owner=getattr(guild,'owner_id',None)
+        # Direct-message interactions have no guild owner to compare. They are
+        # only reached through a short-lived private flow.
+        return guild_owner is None or int(user_id)==int(guild_owner)
+
+    async def reject_non_owner(interaction) -> bool:
+        if is_private_owner(interaction.user.id,getattr(interaction,'guild',None)):
+            return False
+        await interaction.response.send_message(
+            embed=styled_embed('𝐏𝐑𝐈𝐕𝐀𝐓𝐄 𝐀𝐂𝐓𝐈𝐎𝐍','Only the configured owner can access resume or application controls.'),
+            ephemeral=True,
+        )
+        return True
+
+    class OwnerView(discord.ui.View):
+        async def interaction_check(self, interaction):
+            return not await reject_non_owner(interaction)
+
+    def search_embed(role, progress, title='𝐒𝐄𝐀𝐑𝐂𝐇𝐈𝐍𝐆', detail='', freshness='Past 24 hours'):
         text=(
-            f"**{role.title()}**\nPhilippines · Recent jobs\n\n"
+            f"**{role.title()}**\nPhilippines · {freshness}\n\n"
             f"Sources checked: {progress.sources_checked} / {progress.sources_total}\n"
             f"Jobs reviewed: {progress.jobs_reviewed}\n"
-            f"Recent 0–90 day jobs: {progress.recent_ph_jobs}\n"
-            f"Query-relevant jobs: {progress.query_relevant_jobs}\n"
+            f"Recent PH jobs in this window: {progress.recent_ph_jobs}\n"
+            f"Query-relevant tech jobs: {progress.query_relevant_jobs}\n"
             f"Entry-level compatible: {progress.entry_level_compatible}\n"
             f"Qualifying matches: {progress.potential_matches}"
         )
+        if getattr(progress,'cached_only',False):
+            text += '\n\nUsing a cached result from the last 5 minutes; no new source request was made.'
         if detail: text += f"\n\n{detail}"
         return styled_embed(title,text)
 
     async def prepare_letter(job_id, use_ai=True, regenerate=False):
-        from .applications import generated_letter
+        from .applications import generate_cover_letter
         from .models import Job
-        def load_job():
-            with repo.sessions() as s: return s.get(Job,job_id)
-        job=await asyncio.to_thread(load_job)
-        if not job: return None,None,None
-        resume_text=await asyncio.to_thread(repo.resume_text)
-        letter,mode=await generated_letter(job,use_ai,regenerate,resume_text)
-        def store_letter():
-            with repo.sessions() as s:
-                stored=s.get(Job,job_id)
-                if not stored: return None
-                stored.raw_metadata={**(stored.raw_metadata or {}),'cover_letter':letter,'cover_letter_mode':mode}
-                s.commit()
-                return stored
-        job=await asyncio.to_thread(store_letter)
-        return job,letter,mode
+        lock=letter_locks.setdefault(job_id,asyncio.Lock())
+        async with lock:
+            def load_job():
+                with repo.sessions() as s: return s.get(Job,job_id)
+            job=await asyncio.to_thread(load_job)
+            if not job: return None,None,None
+            resume_text=await asyncio.to_thread(repo.resume_text)
+            result=await generate_cover_letter(job,use_ai,regenerate,resume_text)
+            def store_letter():
+                from .applications import cover_letter_metadata
+                with repo.sessions() as s:
+                    stored=s.get(Job,job_id)
+                    if not stored: return None
+                    stored.raw_metadata=cover_letter_metadata(stored.raw_metadata, result)
+                    s.commit()
+                    return stored
+            job=await asyncio.to_thread(store_letter)
+            return job,result.text,result
 
     def set_bot_footer(embed):
         # Discord renders this as an icon; the URL is never placed in message text.
@@ -117,13 +145,33 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         return embed
     def application_method(job):
         return 'EMAIL' if job.application_email else ('PORTAL' if job.application_url else 'MANUAL REVIEW')
-    def document_ready():
-        return 'READY'
+    def document_ready(value: bool):
+        return 'READY' if value else 'NOT CONFIGURED'
     async def send_letter_download(interaction, job, letter, extension):
         from .applications import cover_letter_filename, cover_letter_pdf_bytes, cover_letter_text_bytes
         data=cover_letter_text_bytes(letter) if extension=='txt' else cover_letter_pdf_bytes(letter)
         await interaction.followup.send(file=discord.File(io.BytesIO(data),filename=cover_letter_filename(job,extension)),ephemeral=True)
-    class LetterPreviewView(discord.ui.View):
+
+    async def send_cover_letter_preview(interaction, job, letter):
+        """Render the exact persisted text; this is also used right after regenerate."""
+        from .applications import discord_cover_letter_chunks
+        chunks=discord_cover_letter_chunks(letter)
+        if not chunks:
+            await interaction.followup.send('The saved cover letter contains no readable text.',ephemeral=True)
+            return
+        version=int((job.raw_metadata or {}).get('cover_letter_version', 1) or 1)
+        title=f'**{job.title}**\n{job.company}\nVersion {version}\n\n'
+        await interaction.followup.send(
+            embed=styled_embed('𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑', title+chunks[0]),
+            view=LetterPreviewView(job.id),
+            ephemeral=True,
+        )
+        for index,chunk in enumerate(chunks[1:],start=2):
+            await interaction.followup.send(
+                embed=styled_embed(f'𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑 ({index}/{len(chunks)})',chunk),
+                ephemeral=True,
+            )
+    class LetterPreviewView(OwnerView):
         def __init__(self, job_id): super().__init__(timeout=900); self.job_id=job_id
         async def letter(self):
             def load():
@@ -143,12 +191,29 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await send_letter_download(interaction,job,letter,'pdf')
         @discord.ui.button(label='REGENERATE',style=discord.ButtonStyle.secondary)
         async def regenerate(self,interaction,button):
-            await interaction.response.defer(ephemeral=True,thinking=True); _,_,mode=await prepare_letter(self.job_id,True,True)
-            await interaction.followup.send(embed=styled_embed('𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑 𝐔𝐏𝐃𝐀𝐓𝐄𝐃',f'Your validated {mode.lower()} version is ready to review.'),ephemeral=True)
+            await interaction.response.defer(ephemeral=True,thinking=True)
+            job,_,result=await prepare_letter(self.job_id,True,True)
+            if not job:
+                await interaction.followup.send(embed=styled_embed('𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄','This job is no longer available.'),ephemeral=True)
+                return
+            if result.method == 'AI_REVISED':
+                detail=f'AI created version {result.version}. It is a new validated wording version.'
+            elif result.method == 'DETERMINISTIC_FALLBACK':
+                if result.failure_reason == 'NO_MEANINGFUL_VARIATION':
+                    detail='A meaningfully different wording version could not be made. The current version stays active.'
+                else:
+                    detail=(f'AI revision could not be used ({(result.failure_reason or "unknown").replace("_", " ").lower()}). '
+                            f'A new template-based version {result.version} was saved instead.')
+            else:
+                detail=f'A new deterministic version {result.version} was saved.'
+            if result.similarity is not None:
+                detail += f'\nWriting similarity to the prior version: {result.similarity:.0%}.'
+            await interaction.followup.send(embed=styled_embed('𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑 𝐑𝐄𝐆𝐄𝐍𝐄𝐑𝐀𝐓𝐄𝐃',detail),ephemeral=True)
+            await send_cover_letter_preview(interaction,job,(job.raw_metadata or {}).get('cover_letter',''))
         @discord.ui.button(label='BACK',style=discord.ButtonStyle.secondary)
         async def back(self,interaction,button):
             await interaction.response.send_message(embed=styled_embed('𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖','You can return to the private application review above.'),ephemeral=True)
-    class ReviewView(discord.ui.View):
+    class ReviewView(OwnerView):
         def __init__(self, job_id): super().__init__(timeout=900); self.job_id=job_id
         async def letter(self):
             from .models import Job
@@ -161,14 +226,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.response.defer(ephemeral=True,thinking=True)
             job,letter=await self.letter()
             if not letter: await interaction.followup.send('No cover letter is available.',ephemeral=True); return
-            from .applications import discord_cover_letter_chunks
-            chunks=discord_cover_letter_chunks(letter)
-            if not chunks:
-                await interaction.followup.send('The saved cover letter contains no readable text.',ephemeral=True)
-                return
-            title=f'**{job.title}**\n{job.company}\n\n'
-            await interaction.followup.send(embed=styled_embed('𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑',title+chunks[0]),view=LetterPreviewView(self.job_id),ephemeral=True)
-            for index,chunk in enumerate(chunks[1:],start=2): await interaction.followup.send(embed=styled_embed(f'𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑 ({index}/{len(chunks)})',chunk),ephemeral=True)
+            await send_cover_letter_preview(interaction,job,letter)
         @discord.ui.button(label='VIEW RESUME',style=discord.ButtonStyle.secondary)
         async def resume(self,interaction,button):
             await interaction.response.defer(ephemeral=True,thinking=True)
@@ -186,6 +244,20 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             job,letter=await self.letter()
             if not job or not letter: await interaction.followup.send(embed=styled_embed('𝐃𝐎𝐂𝐔𝐌𝐄𝐍𝐓 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄','No saved cover letter is available.'),ephemeral=True); return
             await send_letter_download(interaction,job,letter,'txt')
+        @discord.ui.button(label='USE TEMPLATE',style=discord.ButtonStyle.secondary)
+        async def use_template(self,interaction,button):
+            await interaction.response.defer(ephemeral=True,thinking=True)
+            job,_,result=await prepare_letter(self.job_id,False,True)
+            if not job:
+                await interaction.followup.send('This job is no longer available.',ephemeral=True)
+                return
+            detail=f'AI was skipped. Template version {result.version} is now the active cover letter.'
+            if result.failure_reason == 'NO_MEANINGFUL_VARIATION':
+                detail='All available template variants were already used. The current version stays active.'
+            if result.similarity is not None:
+                detail += f'\nWriting similarity to the prior version: {result.similarity:.0%}.'
+            await interaction.followup.send(embed=styled_embed('𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑 𝐓𝐄𝐌𝐏𝐋𝐀𝐓𝐄',detail),ephemeral=True)
+            await send_cover_letter_preview(interaction,job,(job.raw_metadata or {}).get('cover_letter',''))
         @discord.ui.button(label='SEND APPLICATION',style=discord.ButtonStyle.primary)
         async def send(self,interaction,button):
             from .models import Job
@@ -197,13 +269,15 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             if job.status=='APPLIED': await interaction.followup.send('Already applied. No duplicate application will be sent.',ephemeral=True); return
             view=ConfirmSendView(self.job_id)
             embed=styled_embed('𝐂𝐎𝐍𝐅𝐈𝐑𝐌 𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍',f'**{job.title}**\n{job.company}')
-            embed.add_field(name='𝐃𝐎𝐂𝐔𝐌𝐄𝐍𝐓𝐒',value=f'Resume\n{document_ready()}\n\nCover Letter\n{document_ready()}',inline=True)
+            has_resume=bool(await asyncio.to_thread(repo.resume_info) or (cfg.resume_path and Path(cfg.resume_path).exists()))
+            has_letter=bool((job.raw_metadata or {}).get('cover_letter'))
+            embed.add_field(name='𝐃𝐎𝐂𝐔𝐌𝐄𝐍𝐓𝐒',value=f'Resume\n{document_ready(has_resume)}\n\nCover Letter\n{document_ready(has_letter)}',inline=True)
             embed.add_field(name='𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐌𝐄𝐓𝐇𝐎𝐃',value=application_method(job),inline=True)
             embed.add_field(name='𝐒𝐀𝐅𝐄𝐓𝐘',value=f'Dry Run\n{"ON" if cfg.application_dry_run else "OFF"}\n\nNo employer will be contacted while dry-run mode is enabled.' if cfg.application_dry_run else 'Live sending is disabled pending explicit configuration.',inline=False)
             await interaction.followup.send(embed=embed,view=view,ephemeral=True)
         @discord.ui.button(label='CANCEL',style=discord.ButtonStyle.secondary)
         async def cancel(self,interaction,button): await interaction.response.send_message('Application review cancelled.',ephemeral=True)
-    class ConfirmSendView(discord.ui.View):
+    class ConfirmSendView(OwnerView):
         def __init__(self,job_id): super().__init__(timeout=600); self.job_id=job_id
         @discord.ui.button(label='CONFIRM SEND',style=discord.ButtonStyle.danger)
         async def confirm(self,interaction,button):
@@ -215,6 +289,8 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                     if not job: return 'missing'
                     if job.status=='APPLIED': return 'applied'
                     if cfg.application_dry_run:
+                        if (job.raw_metadata or {}).get('application_dry_run_at'):
+                            return 'dry_run_existing'
                         job.raw_metadata={**(job.raw_metadata or {}),'application_dry_run_at':datetime.now().isoformat()}
                         from .models import JobEvent
                         s.add(JobEvent(job_id=job.id,event_type='DRY_RUN_PACKAGE_PREPARED',detail='Application package prepared; no employer contacted.'))
@@ -224,6 +300,8 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             result=await asyncio.to_thread(check_and_record)
             if result=='missing': await interaction.followup.send('Job not found.',ephemeral=True); return
             if result=='applied': await interaction.followup.send('Already applied. No duplicate application will be sent.',ephemeral=True); return
+            if result=='dry_run_existing':
+                await interaction.followup.send('A dry-run package was already prepared for this job. No duplicate simulation was created.',ephemeral=True); return
             if result=='dry_run':
                 def load():
                     with repo.sessions() as s: return s.get(Job,self.job_id)
@@ -239,7 +317,21 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         @discord.ui.button(label='CANCEL',style=discord.ButtonStyle.secondary)
         async def cancel(self,interaction,button): await interaction.response.send_message('Send cancelled.',ephemeral=True)
     async def send_application_review(interaction, job_id):
-        job,_,mode=await prepare_letter(job_id,True)
+        from .models import Job, JobStatus
+        def load_current():
+            with repo.sessions() as s:
+                return s.get(Job,job_id)
+        current=await asyncio.to_thread(load_current)
+        if not current:
+            await interaction.followup.send('This job is no longer available.',ephemeral=True)
+            return
+        if current.status in {JobStatus.APPLIED.value,JobStatus.IGNORED.value,JobStatus.REJECTED.value,JobStatus.EXPIRED.value}:
+            await interaction.followup.send(
+                embed=styled_embed('𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐔𝐍𝐀𝐕𝐀𝐈𝐋𝐀𝐁𝐋𝐄',f'This job is currently {current.status.title()}. No cover letter was generated.'),
+                ephemeral=True,
+            )
+            return
+        job,_,result=await prepare_letter(job_id,True)
         if not job:
             await interaction.followup.send('This job is no longer available.',ephemeral=True)
             return
@@ -247,11 +339,14 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         embed.add_field(name='𝐌𝐀𝐓𝐂𝐇',value=f'{job.score}% MATCH',inline=True)
         stored_resume=await asyncio.to_thread(repo.resume_info)
         embed.add_field(name='𝐑𝐄𝐒𝐔𝐌𝐄',value='READY' if stored_resume or (cfg.resume_path and Path(cfg.resume_path).exists()) else 'NOT CONFIGURED',inline=True)
-        embed.add_field(name='𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑',value=f'READY ({mode})',inline=True)
+        letter_status = result.method
+        if result.failure_reason:
+            letter_status += f' · {result.failure_reason.replace("_", " ")}'
+        embed.add_field(name='𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑',value=f'READY ({letter_status})',inline=True)
         embed.add_field(name='𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐌𝐄𝐓𝐇𝐎𝐃',value=application_method(job),inline=True)
         embed.add_field(name='𝐒𝐀𝐅𝐄𝐓𝐘',value='DRY RUN ON' if cfg.application_dry_run else 'MANUAL REVIEW REQUIRED',inline=False)
         await interaction.followup.send(embed=embed,view=ReviewView(job_id),ephemeral=True)
-    class JobView(discord.ui.View):
+    class JobView(OwnerView):
         def __init__(self, job):
             super().__init__(timeout=900); self.job_id=job.id
             self.add_item(discord.ui.Button(label='VIEW JOB',style=discord.ButtonStyle.link,url=job.url))
@@ -261,8 +356,15 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await send_application_review(interaction,self.job_id)
         @discord.ui.button(label='SAVE',style=discord.ButtonStyle.secondary)
         async def save(self,interaction,button):
-            from .models import Job
+            from .models import Job, JobStatus
             await interaction.response.defer(ephemeral=True,thinking=True)
+            def current_status():
+                with repo.sessions() as s:
+                    job=s.get(Job,self.job_id)
+                    return job.status if job else None
+            status=await asyncio.to_thread(current_status)
+            if status in {JobStatus.APPLIED.value,JobStatus.IGNORED.value,JobStatus.REJECTED.value,JobStatus.EXPIRED.value}:
+                await interaction.followup.send(f'This job is already {str(status).title()}; it was not changed.',ephemeral=True); return
             if not await asyncio.to_thread(repo.set_job_status,self.job_id,'SAVED','Saved from Discord job card.'):
                 await interaction.followup.send('This job is no longer available.',ephemeral=True); return
             embed=interaction.message.embeds[0]; embed.add_field(name='𝐒𝐓𝐀𝐓𝐔𝐒',value='SAVED',inline=False)
@@ -270,8 +372,15 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.followup.send(embed=styled_embed('𝐒𝐀𝐕𝐄𝐃','This job has been saved for later.'),ephemeral=True)
         @discord.ui.button(label='SKIP',style=discord.ButtonStyle.secondary)
         async def skip(self,interaction,button):
-            from .models import Job
+            from .models import Job, JobStatus
             await interaction.response.defer(ephemeral=True,thinking=True)
+            def current_status():
+                with repo.sessions() as s:
+                    job=s.get(Job,self.job_id)
+                    return job.status if job else None
+            status=await asyncio.to_thread(current_status)
+            if status in {JobStatus.APPLIED.value,JobStatus.REJECTED.value,JobStatus.EXPIRED.value}:
+                await interaction.followup.send(f'This job is already {str(status).title()}; it was not changed.',ephemeral=True); return
             if not await asyncio.to_thread(repo.set_job_status,self.job_id,'IGNORED','Skipped from Discord job card.'):
                 await interaction.followup.send('This job is no longer available.',ephemeral=True); return
             embed=interaction.message.embeds[0]; embed.add_field(name='𝐒𝐓𝐀𝐓𝐔𝐒',value='SKIPPED',inline=False)
@@ -353,7 +462,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         async def callback(self,interaction):
             await interaction.response.defer(ephemeral=True,thinking=True)
             await send_application_review(interaction,self.job_id)
-    class ViewAllJobsView(discord.ui.View):
+    class ViewAllJobsView(OwnerView):
         def __init__(self,jobs,page=0,total_pages=1):
             super().__init__(timeout=900); self.page=page; self.total_pages=total_pages
             for index,job in enumerate(jobs,start=page*5+1):
@@ -391,8 +500,12 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         )
         try:
             jobs,total=await load_view_all_jobs(page=page, days=days, min_score=min_score)
-            embed,pages=view_all_embed(jobs,page,total)
-            await loading.edit(embed=embed,view=ViewAllJobsView(jobs,page,pages))
+            pages=max(1,(total+4)//5)
+            safe_page=min(max(0,page),pages-1)
+            if safe_page != page:
+                jobs,total=await load_view_all_jobs(page=safe_page, days=days, min_score=min_score)
+            embed,pages=view_all_embed(jobs,safe_page,total)
+            await loading.edit(embed=embed,view=ViewAllJobsView(jobs,safe_page,pages))
         except Exception as exc:
             log.warning('discord_view_all_failed',extra={'error_type':type(exc).__name__})
             await loading.edit(
@@ -414,39 +527,45 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         active_searches.add(user_id); search_cooldowns[user_id]=now+30
         from .manual_search import SearchProgress
         progress=SearchProgress()
-        status=await channel.send(embed=search_embed(role,progress,detail='Starting targeted discovery…'))
+        status=await channel.send(embed=search_embed(role,progress,detail='Starting targeted discovery…',freshness=freshness))
         last_edit=0.0
         async def update(current):
             nonlocal last_edit
             # Source completion is meaningful; coalesce rapid concurrent updates.
             if time.monotonic()-last_edit < .25 and current.sources_checked < current.sources_total: return
             last_edit=time.monotonic()
-            await status.edit(embed=search_embed(role,current,detail='Checking live ATS sources…'))
+            await status.edit(embed=search_embed(role,current,detail='Checking live ATS sources…',freshness=freshness))
         try:
             async with typing(channel):
                 if hasattr(manual_search,'find_with_progress'):
                     outcome=await manual_search.find_with_progress(role,location,freshness,'',5,work_setup,max(0,min(100,int(minimum_score))),True,'all',update)
                     jobs=outcome.jobs; current=outcome.progress; duration=outcome.duration_seconds
+                    alternatives=outcome.alternatives
+                    cached_only=outcome.cached_only
                 else:
                     jobs=await manual_search.find(role,location,freshness,'',5,work_setup,max(0,min(100,int(minimum_score))))
-                    current=progress; duration=0
+                    current=progress; duration=0; alternatives=None; cached_only=False
             if jobs:
-                await status.edit(embed=search_embed(role,current,'𝐒𝐄𝐀𝐑𝐂𝐇 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄',f'Matching jobs: {len(jobs)}\nDuration: {duration:.1f}s'))
+                mode='Cached stored/live result; no new source request.' if cached_only else f'Duration: {duration:.1f}s'
+                await status.edit(embed=search_embed(role,current,'𝐒𝐄𝐀𝐑𝐂𝐇 𝐂𝐎𝐌𝐏𝐋𝐄𝐓𝐄',f'Matching jobs: {len(jobs)}\n{mode}',freshness))
                 for job in jobs[:3]:
                     embed,view=card(job); await channel.send(embed=embed,view=view)
             else:
                 source_note='Live discovery was unavailable; cached data only was checked.' if not current.live_available else 'Try a related title or use fewer words in your search.'
-                suggestions=await asyncio.to_thread(manual_search.suggested_recent_jobs,role,3)
+                if cached_only:
+                    source_note='This is a cached result from the last 5 minutes; no new source request was made.'
+                suggestions=(alternatives.jobs if alternatives else [])
+                alternative_label=(alternatives.label if alternatives else 'Stored profile-qualified alternatives from the last 30 days')
                 suggestion_note=(
-                    f'Qualifying matches: 0\n\n{source_note}\n\n'
-                    f'𝐒𝐔𝐆𝐆𝐄𝐒𝐓𝐄𝐃 𝐀𝐋𝐓𝐄𝐑𝐍𝐀𝐓𝐈𝐕𝐄𝐒: {len(suggestions)}'
-                    if suggestions else f'Qualifying matches: 0\n\n{source_note}'
+                    f'{source_note}\n\n𝐒𝐔𝐆𝐆𝐄𝐒𝐓𝐄𝐃 𝐀𝐋𝐓𝐄𝐑𝐍𝐀𝐓𝐈𝐕𝐄𝐒: {len(suggestions)}'
+                    if suggestions else source_note
                 )
-                await status.edit(embed=search_embed(role,current,'𝐍𝐎 𝐑𝐄𝐂𝐄𝐍𝐓 𝐌𝐀𝐓𝐂𝐇𝐄𝐒',suggestion_note))
+                await status.edit(embed=search_embed(role,current,'𝐍𝐎 𝐄𝐗𝐀𝐂𝐓 𝐑𝐄𝐂𝐄𝐍𝐓 𝐌𝐀𝐓𝐂𝐇𝐄𝐒',suggestion_note,freshness))
                 if suggestions:
                     await channel.send(embed=styled_embed(
                         '𝐒𝐔𝐆𝐆𝐄𝐒𝐓𝐄𝐃 𝐉𝐎𝐁𝐒',
-                        'No exact recent match was found. These are real recent jobs that fit your profile and may be worth checking.',
+                        f'No exact match was found in {freshness}. These are {alternative_label.lower()}. '
+                        'They fit your profile, but they are not being presented as exact results for this search.',
                     ))
                     for job in suggestions:
                         embed,view=card(job); await channel.send(embed=embed,view=view)
@@ -525,7 +644,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         embed.add_field(name='𝐄𝐗𝐏𝐈𝐑𝐘',value='This signed one-time link expires in 10 minutes.',inline=False)
         await interaction.followup.send(embed=embed,ephemeral=True)
 
-    class JobStreetView(discord.ui.View):
+    class JobStreetView(OwnerView):
         def __init__(self):
             super().__init__(timeout=None)
         @discord.ui.button(label='CONNECT JOBSTREET',style=discord.ButtonStyle.primary,custom_id='jobhunter:jobstreet-connect')
@@ -558,17 +677,16 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             if not channel or not hasattr(channel,'send'):
                 await interaction.followup.send('Please use `v!search <role>` in this channel to start a search.',ephemeral=True); return
             await execute_search(channel,interaction.user.id,str(self.role),str(self.location or 'Philippines'),str(self.freshness or 'Past 24 hours'),str(self.work_setup),str(self.minimum_score or '0'))
-    class ControlView(discord.ui.View):
+    class ControlView(OwnerView):
         def __init__(self):
             super().__init__(timeout=None)
-            if cfg.public_base_url:
-                token=ActionTokens(cfg).issue_control('resume')
-                if token: self.add_item(discord.ui.Button(label='UPLOAD RESUME',style=discord.ButtonStyle.link,url=f'{cfg.public_base_url.rstrip("/")}/resume/{token}'))
         @discord.ui.button(label='SCAN NOW',style=discord.ButtonStyle.primary,custom_id='jobhunter:scan')
         async def scan(self,interaction,button):
             if scan_task and not scan_task.done(): await interaction.response.send_message(embed=styled_embed('𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆','A scan is already running.'),ephemeral=True); return
             await interaction.response.send_message(embed=styled_embed('𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆','Searching for recent active jobs…'),ephemeral=True)
-            await launch_scan()
+            original=getattr(interaction,'original_response',None)
+            message=await original() if original else None
+            await launch_scan(message)
         @discord.ui.button(label='SEARCH JOBS',style=discord.ButtonStyle.secondary,custom_id='jobhunter:search')
         async def search(self,interaction,button): await interaction.response.send_modal(SearchModal())
         @discord.ui.button(label='VIEW STATUS',style=discord.ButtonStyle.secondary,custom_id='jobhunter:status')
@@ -615,20 +733,24 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         therefore removes the old panel and posts the same persistent panel
         once after a completed bot batch, never once per countdown tick.
         """
-        channel=await resolve_channel()
-        if not channel: return
-        message_id=await asyncio.to_thread(repo.state,'discord_bot_control_panel_message_id')
-        embed=await panel_embed()
-        if message_id:
-            try:
-                message=await channel.fetch_message(int(message_id))
-                if not bump:
-                    await message.edit(embed=embed,view=panel_view)
-                    return
-                await message.delete()
-            except Exception: await asyncio.to_thread(repo.set_state,'discord_bot_control_panel_message_id',None)
-        message=await channel.send(embed=embed,view=panel_view)
-        await asyncio.to_thread(repo.set_state,'discord_bot_control_panel_message_id',str(message.id))
+        async with panel_refresh_lock:
+            channel=await resolve_channel()
+            if not channel: return
+            message_id=await asyncio.to_thread(repo.state,'discord_bot_control_panel_message_id')
+            embed=await panel_embed()
+            if message_id:
+                try:
+                    message=await channel.fetch_message(int(message_id))
+                    if not bump:
+                        await message.edit(embed=embed,view=panel_view)
+                        return
+                    await message.delete()
+                except Exception:
+                    # A transient edit failure must not make two concurrent
+                    # callers create competing control panels.
+                    await asyncio.to_thread(repo.set_state,'discord_bot_control_panel_message_id',None)
+            message=await channel.send(embed=embed,view=panel_view)
+            await asyncio.to_thread(repo.set_state,'discord_bot_control_panel_message_id',str(message.id))
     async def launch_scan(message=None):
         nonlocal scan_task
         if scan_task and not scan_task.done(): return False
@@ -650,7 +772,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         if not channel: return
         def pending_ids():
             with repo.sessions() as s:
-                return s.scalars(select(Job.id).where(Job.notification_state=='BOT_PENDING').limit(3)).all()
+                return s.scalars(select(Job.id).where(Job.notification_state.in_({'BOT_PENDING','FAILED'})).limit(3)).all()
         ids=await asyncio.to_thread(pending_ids)
         delivered = False
         for job_id in ids:
@@ -660,6 +782,12 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 with repo.sessions() as s: return s.get(Job,job_id)
             job=await asyncio.to_thread(load_job)
             if not job: continue
+            if job.status in {
+                JobStatus.SAVED.value, JobStatus.IGNORED.value,
+                JobStatus.APPLIED.value, JobStatus.REJECTED.value,
+            }:
+                await asyncio.to_thread(repo.record_alert_delivery,job_id,'SKIPPED')
+                continue
             try:
                 from .services import DISCORD_ALERT_ROLE_ALLOWLIST
                 role_id=cfg.discord_alert_role_id if cfg.discord_alert_role_id in DISCORD_ALERT_ROLE_ALLOWLIST else None
@@ -668,12 +796,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                 content=f'<@&{role_id}>\n\n{headline}' if role_id else headline
                 embed,view=card(job); await channel.send(content=content,embed=embed,view=view,allowed_mentions=allowed)
                 delivered = True
-                def mark_sent():
-                    with repo.sessions() as s:
-                        stored=s.get(Job,job_id)
-                        if stored:
-                            stored.notification_state='SENT'; stored.status=JobStatus.NOTIFIED.value; s.commit()
-                await asyncio.to_thread(mark_sent)
+                await asyncio.to_thread(repo.record_alert_delivery,job_id,'SENT')
             except Exception as exc:
                 # Leave a failed claim retryable by the webhook fallback, but never
                 # create a second successful bot alert for the same job.
@@ -724,10 +847,23 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             )
             return
         if command=='resume':
+            if not is_private_owner(message.author.id,getattr(message,'guild',None)):
+                await message.channel.send('Resume management is available only to the configured owner.'); return
             token=ActionTokens(cfg).issue_control('resume')
             if not token or not cfg.public_base_url:
                 await message.channel.send('Resume upload is not configured. Set APP_SECRET_KEY and PUBLIC_BASE_URL first.'); return
-            await message.channel.send(f'Upload or replace the saved resume here: {cfg.public_base_url.rstrip("/")}/resume/{token}'); return
+            private_url=f'{cfg.public_base_url.rstrip("/")}/resume/{token}'
+            try:
+                await message.author.send(
+                    embed=styled_embed(
+                        '𝐑𝐄𝐒𝐔𝐌𝐄 𝐔𝐏𝐋𝐎𝐀𝐃',
+                        f'Use this one-time private upload link within 15 minutes:\n{private_url}',
+                    )
+                )
+                await message.channel.send('I sent your private resume upload link by DM.')
+            except discord.Forbidden:
+                await message.channel.send('I could not DM you. Enable direct messages for this server, then run `v!resume` again.')
+            return
         if command=='search':
             if not argument:
                 await message.channel.send('Usage:\n`v!search <role>`\n\nExamples:\n`v!search Software Engineer`\n`v!search Junior DevOps`\n`v!search IT Support`'); return
@@ -738,10 +874,18 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             from .models import Job, JobStatus
             def load_latest():
                 with repo.sessions() as s:
-                    return s.scalars(select(Job).where(Job.status!=JobStatus.EXPIRED.value,Job.score>=cfg.min_notify_score).order_by(Job.date_posted.desc()).limit(3)).all()
+                    blocked=(JobStatus.EXPIRED.value,JobStatus.IGNORED.value,JobStatus.APPLIED.value,JobStatus.REJECTED.value)
+                    return s.scalars(select(Job).where(
+                        Job.status.not_in(blocked),
+                        Job.score>=cfg.min_notify_score,
+                        Job.date_posted.is_not(None),
+                    ).order_by(Job.date_posted.desc()).limit(3)).all()
             jobs=await asyncio.to_thread(load_latest)
-            for job in jobs:
-                embed,view=card(job); await message.channel.send(embed=embed,view=view)
+            if not jobs:
+                await message.channel.send(embed=styled_embed('𝐋𝐀𝐓𝐄𝐒𝐓 𝐉𝐎𝐁𝐒','No recent qualifying stored jobs are available yet. The next automatic scan will check again.'))
+            else:
+                for job in jobs:
+                    embed,view=card(job); await message.channel.send(embed=embed,view=view)
         elif command=='viewall':
             try:
                 requested_page=max(1,int(argument.split()[0]))-1 if argument else 0
@@ -750,6 +894,8 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await send_view_all(message.channel,page=requested_page)
         elif command=='status': await message.channel.send(embed=await panel_embed())
         elif command=='scan':
+            if not is_private_owner(message.author.id,getattr(message,'guild',None)):
+                await message.channel.send('Only the configured owner can start a manual scan.'); return
             if scan_task and not scan_task.done(): await message.channel.send(embed=styled_embed('𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆','A scan is already running.')); return
             notice=await message.channel.send(embed=styled_embed('𝐒𝐂𝐀𝐍𝐍𝐈𝐍𝐆','Searching for recent active jobs…')); await launch_scan(notice)
         else: await message.channel.send('Use `v!help`.')

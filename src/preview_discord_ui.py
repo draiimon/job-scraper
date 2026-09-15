@@ -61,7 +61,7 @@ Worked with AWS, Docker, Terraform, Linux, and GitHub Actions.
     add("JOB UI","𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇","**82% MATCH**\n\n**Software Engineer**\nExample Technologies PH\nMakati City · Hybrid",(("𝐖𝐇𝐘 𝐈𝐓 𝐅𝐈𝐓𝐒","Python\nDocker\nEntry-level compatible",False),))
     add("JOB UI","𝐍𝐄𝐖 𝐉𝐎𝐁 𝐀𝐋𝐄𝐑𝐓","@Job Alerts · Preview only\n\n**Software Engineer**\nExample Technologies PH\nPosted 4 hours ago\n\nNo role is pinged in this gallery.")
     add("APPLICATION UI","𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐑𝐄𝐕𝐈𝐄𝐖","**Software Engineer**\nExample Technologies PH",(
-        ("𝐌𝐀𝐓𝐂𝐇","82% MATCH",True),("𝐑𝐄𝐒𝐔𝐌𝐄","READY",True),("𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑","READY (TEMPLATE)",True),("𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐌𝐄𝐓𝐇𝐎𝐃","PORTAL",True),("𝐒𝐀𝐅𝐄𝐓𝐘","DRY RUN ON",False),
+        ("𝐌𝐀𝐓𝐂𝐇","82% MATCH",True),("𝐑𝐄𝐒𝐔𝐌𝐄","READY",True),("𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑","READY (DETERMINISTIC FALLBACK · RATE LIMIT)",True),("𝐀𝐏𝐏𝐋𝐈𝐂𝐀𝐓𝐈𝐎𝐍 𝐌𝐄𝐓𝐇𝐎𝐃","PORTAL",True),("𝐒𝐀𝐅𝐄𝐓𝐘","DRY RUN ON",False),
     ))
     for index,chunk in enumerate(discord_cover_letter_chunks(letter),start=1):
         add("APPLICATION UI",f"𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑 ({index})",chunk)

@@ -13,6 +13,14 @@ from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, App
 from .security import ActionTokens
 log=logging.getLogger(__name__)
 DISCORD_ALERT_ROLE_ALLOWLIST={'1346328166100107366'}
+# A notification confirms delivery; it is never an application-status decision.
+# Only a newly discovered job may become NOTIFIED.  Every other state (saved,
+# ignored, reviewing, applied, rejected, and later application outcomes) wins
+# if delivery races with a user action.
+NOTIFICATION_MUTABLE_STATUSES=frozenset({
+    JobStatus.NEW.value,
+    JobStatus.NOTIFIED.value,
+})
 class Repository:
     def __init__(self, url: str):
         # Supabase commonly supplies postgresql:// URLs; explicitly select the
@@ -254,12 +262,34 @@ class Repository:
             if current.get('owner') == instance_id:
                 row.value=json.dumps({'owner':'','expires_at':datetime.now(timezone.utc).isoformat()})
     def claim_bot_alert(self, job_id: int) -> bool:
-        """Reserve a pending alert before sending so it cannot ping twice."""
+        """Atomically reserve a bot alert without ever re-claiming a sent one.
+
+        ``FAILED`` is deliberately retryable: it means a prior *claimed* bot
+        delivery did not complete.  ``SENT`` and ``BOT_SENDING`` are not, so a
+        retry worker cannot turn one successful alert into a duplicate ping.
+        """
         with self.sessions.begin() as s:
             job=s.get(Job,job_id)
-            if not job or job.notification_state != 'BOT_PENDING':
+            if not job or job.notification_state not in {'BOT_PENDING','FAILED'}:
                 return False
             job.notification_state='BOT_SENDING'
+        return True
+
+    def record_alert_delivery(self, job_id: int, notification_state: str) -> bool:
+        """Persist delivery state without replacing a user/application decision.
+
+        Both the webhook path and the Discord-bot path can use this one small
+        transaction.  The status transition to ``NOTIFIED`` is conditional on
+        the current database value instead of the detached ``Job`` object that
+        was used to render the alert, which closes a save/skip/apply race.
+        """
+        with self.sessions.begin() as s:
+            job=s.get(Job,job_id)
+            if not job:
+                return False
+            job.notification_state=notification_state
+            if notification_state == 'SENT' and job.status in NOTIFICATION_MUTABLE_STATUSES:
+                job.status=JobStatus.NOTIFIED.value
         return True
     def set_job_status(self, job_id: int, status: str, detail: str = '') -> bool:
         """Persist a state change and its audit event in one transaction."""
@@ -295,7 +325,12 @@ class Repository:
                 item.filename=filename; item.content_type=content_type; item.file_data=file_data; item.extracted_text=extracted_text; item.uploaded_at=datetime.now(timezone.utc)
             for job in s.scalars(select(Job)).all():
                 metadata=dict(job.raw_metadata or {})
-                metadata.pop('cover_letter',None); metadata.pop('cover_letter_mode',None)
+                for key in (
+                    'cover_letter', 'cover_letter_mode', 'cover_letter_generation_method',
+                    'cover_letter_failure_reason', 'cover_letter_similarity',
+                    'cover_letter_version', 'cover_letter_body_hash', 'cover_letter_versions',
+                ):
+                    metadata.pop(key, None)
                 job.raw_metadata=metadata
             s.commit()
             return self.resume_info()
@@ -421,14 +456,10 @@ class Pipeline:
             return
         try:
             job.notification_state=await self.discord.send(job)
-            if job.notification_state=='SENT': job.status=JobStatus.NOTIFIED.value
         except httpx.HTTPError as e:
             job.notification_state='FAILED'; log.warning('discord_notification_failed',extra={'job_id':job.id,'error':str(e)})
         def persist_notification():
-            with self.repo.sessions() as s:
-                stored=s.get(Job,job.id)
-                if stored:
-                    stored.notification_state=job.notification_state; stored.status=job.status; s.commit()
+            self.repo.record_alert_delivery(job.id,job.notification_state)
         await asyncio.to_thread(persist_notification)
     async def retry_notifications(self):
         if not self.config.discord_webhook_url: return 0
