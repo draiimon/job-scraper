@@ -341,7 +341,7 @@ Send automatic alerts only for legitimate qualifying jobs.
 
 Role ping:
 
-<@&1346328166100107366>
+<@&1345727357662658603>
 
 Exactly once per new qualifying alert.
 

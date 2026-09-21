@@ -68,7 +68,7 @@ The pipeline prioritizes DevOps, cloud, infrastructure, systems, Linux, SRE, sup
 
 Freshness uses the actual source post date, not discovery time. Jobs from 0–1, 2–7, 8–14, 15–30, 31–60, and 61–90 days receive progressively lower priority; relevant active jobs remain eligible through day 90. Jobs older than 90 days are normally skipped. A stored job can alert again only with source evidence of a genuine repost/reactivation, such as a new posting timestamp or ID. Cross-source deduplication remains active.
 
-Only a real new qualifying automatic alert can mention role `<@&1346328166100107366>`. The allowlist permits that role only. Search, status, help, previews, errors, scan updates, saves, and duplicate deliveries never ping a role, `@everyone`, or `@here`. The default automatic anti-spam limit is 10 alerts per cycle; valid overflow stays persisted instead of being discarded. A late successful alert can mark only `NEW`/`NOTIFIED` jobs as notified; it never overwrites a saved, skipped, applied, rejected, or other application decision.
+Only a real new qualifying automatic alert can mention role `<@&1345727357662658603>`. The allowlist permits that role only. Search, status, help, previews, errors, scan updates, saves, and duplicate deliveries never ping a role, `@everyone`, or `@here`. The default automatic anti-spam limit is 10 alerts per cycle; valid overflow stays persisted instead of being discarded. A late successful alert can mark only `NEW`/`NOTIFIED` jobs as notified; it never overwrites a saved, skipped, applied, rejected, or other application decision.
 
 ## Cover-letter and application flow
 

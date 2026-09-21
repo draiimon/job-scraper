@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     # application controls. If unset, the Discord server owner is used.
     discord_owner_id: str | None = None
     # Only this explicitly configured role may be pinged for a new real alert.
-    discord_alert_role_id: str | None = "1346328166100107366"
+    discord_alert_role_id: str | None = "1345727357662658603"
     discord_motivation: str = ""
     discord_motivations_json: str = ""
     min_notify_score: int = 70

@@ -17,7 +17,7 @@ def test_gallery_uses_shared_theme_and_is_safe_to_preview():
         assert embed.footer.text == MASTER_EMBED_FOOTER
         text=f'{embed.title}\n{embed.description}\n' + '\n'.join(field.value for field in embed.fields)
         assert '[image](' not in text.lower() and 'svg' not in text.lower()
-        assert '<@&1346328166100107366>' not in text
+        assert '<@&1345727357662658603>' not in text
     cover='\n'.join(embed.description for group,embed in states if group == 'APPLICATION UI' and '𝐂𝐎𝐕𝐄𝐑 𝐋𝐄𝐓𝐓𝐄𝐑' in embed.title)
     assert 'andreicastillofficial@gmail.com' in cover
     assert 'https://github.com/draiimon' in cover

@@ -12,7 +12,7 @@ from .jobs import NormalizedJob, canonicalize_url, clean, evaluate, extract_skil
 from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, AppSetting, ResumeProfile, JobEvent
 from .security import ActionTokens
 log=logging.getLogger(__name__)
-DISCORD_ALERT_ROLE_ALLOWLIST={'1346328166100107366'}
+DISCORD_ALERT_ROLE_ALLOWLIST={'1345727357662658603'}
 # A notification confirms delivery; it is never an application-status decision.
 # Only a newly discovered job may become NOTIFIED.  Every other state (saved,
 # ignored, reviewing, applied, rejected, and later application outcomes) wins

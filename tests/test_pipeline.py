@@ -149,8 +149,8 @@ def test_discord_alert_is_compact_and_has_real_link_buttons():
     record=Job(id=1,title='Junior Cloud Engineer',company='Cloud PH',location='Makati, Philippines',source='greenhouse:Cloud PH',description='',url='https://example.com/view',application_url='https://example.com/apply',score=87,match_reasons=['AWS','Docker'],warnings=[],work_setup='Hybrid',salary=None,date_posted=None)
     cfg=Settings(app_secret_key='test-secret',public_base_url='https://agent.example')
     payload=Discord(None,'Apply now!',cfg).payload(record)
-    assert payload['content'] == '<@&1346328166100107366>\n\nApply now!'
-    assert payload['allowed_mentions'] == {'parse':[], 'roles':['1346328166100107366']}
+    assert payload['content'] == '<@&1345727357662658603>\n\nApply now!'
+    assert payload['allowed_mentions'] == {'parse':[], 'roles':['1345727357662658603']}
     assert payload['embeds'][0]['title'] == '𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇'
     assert '✅' not in payload['embeds'][0]['fields'][0]['value']
     assert payload['components'][0]['components'][0]['url'] == record.url
@@ -160,14 +160,14 @@ def test_discord_alert_is_compact_and_has_real_link_buttons():
 
 def test_role_ping_is_only_for_a_real_alert_and_never_allows_everyone():
     record=Job(id=2,title='IT Support Specialist',company='Cloud PH',location='Manila, Philippines',source='fixture',description='',url='https://example.com/view',score=70,match_reasons=[],warnings=[],raw_metadata={})
-    cfg=Settings(discord_alert_role_id='1346328166100107366')
+    cfg=Settings(discord_alert_role_id='1345727357662658603')
     real=Discord(None,'Headline',cfg).payload(record)
     test=Discord(None,'Headline',cfg).payload(record,test=True)
-    assert '<@&1346328166100107366>' in real['content']
+    assert '<@&1345727357662658603>' in real['content']
     assert '<@&' not in test['content']
     assert '@everyone' not in real['content'] and '@here' not in real['content']
     assert real['allowed_mentions']['parse'] == []
-    assert real['allowed_mentions']['roles'] == ['1346328166100107366']
+    assert real['allowed_mentions']['roles'] == ['1345727357662658603']
 
 def test_duplicate_bot_alert_claim_is_rejected(tmp_path):
     repo=Repository(f'sqlite:///{tmp_path}/role-alert.db'); repo.create_schema()
