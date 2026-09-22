@@ -64,7 +64,7 @@ def test_location_filter():
 
 def test_ninety_day_freshness_window_is_inclusive():
     points,reason,active=freshness(job(date_posted=datetime.now(timezone.utc)-timedelta(days=31)))
-    assert active and points == -5 and '31–60' in reason
+    assert active and points == -5 and '31-60' in reason
     points,reason,active=freshness(job(date_posted=datetime.now(timezone.utc)-timedelta(days=91)))
     assert not active and points == -100 and '90 days' in reason
 
@@ -151,9 +151,10 @@ def test_discord_alert_is_compact_and_has_real_link_buttons():
     payload=Discord(None,'Apply now!',cfg).payload(record)
     assert payload['content'] == '<@&1345727357662658603>\n\nApply now!'
     assert payload['allowed_mentions'] == {'parse':[], 'roles':['1345727357662658603']}
-    assert payload['embeds'][0]['title'] == '𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇'
+    assert payload['embeds'][0]['title'] == 'STRONG MATCH'
     assert '✅' not in payload['embeds'][0]['fields'][0]['value']
     assert payload['components'][0]['components'][0]['url'] == record.url
+    assert any(x['label']=='DIRECT APPLY' and x['url']==record.application_url for x in payload['components'][0]['components'])
     assert any(x['label']=='APPLY NOW' and x['url'].startswith('https://agent.example/actions/') for x in payload['components'][0]['components'])
     assert sum(x['name']=='𝐖𝐀𝐍𝐓 𝐓𝐎 𝐅𝐈𝐍𝐃 𝐀 𝐒𝐏𝐄𝐂𝐈𝐅𝐈𝐂 𝐉𝐎𝐁?' for x in payload['embeds'][0]['fields']) == 1
     assert Discord(None,'',cfg).payload(record,test=True)['components'] == []
@@ -262,7 +263,7 @@ def test_empty_environment_values_keep_scheduler_defaults(monkeypatch):
     monkeypatch.setenv('MIN_NOTIFY_SCORE','')
     # This is a defaults test; it must not inherit the operator's local .env.
     cfg=Settings(_env_file=None)
-    assert cfg.polling_enabled is True and cfg.poll_interval_seconds == 900 and cfg.min_notify_score == 70
+    assert cfg.polling_enabled is True and cfg.poll_interval_seconds == 900 and cfg.min_notify_score == 60
 
 def test_discord_scan_times_use_native_dynamic_timestamps():
     value='2026-09-14T11:24:40+00:00'
@@ -315,6 +316,9 @@ def test_jobs_table_is_date_sorted_read_only_and_uses_safe_listing_links(tmp_pat
     assert page.index('Software Engineer') < page.index('IT Support Specialist')
     assert 'VIEW JOB' in page and 'After Hours Job Hunter • Made by masoncalix' in page
     assert 'submits an application' in page
+    filtered=main_module.jobs_table(min_score=0,days=30,role='Software').body.decode()
+    assert 'Software Engineer' in filtered and 'IT Support Specialist' not in filtered
+    assert 'placeholder="Technology"' in filtered and 'placeholder="Provider"' in filtered
 
 @pytest.mark.asyncio
 async def test_brightdata_normalizes_and_caches_results():

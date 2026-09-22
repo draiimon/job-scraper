@@ -194,7 +194,7 @@ class ManualJobSearch:
     @staticmethod
     def _is_entry_level_compatible(warnings: list[str]) -> bool:
         return not any(
-            warning.startswith("Senior-level") or warning.startswith("Requires")
+            warning.startswith("Senior-level") or warning.startswith("Requires 5+")
             for warning in warnings
         )
 
@@ -383,7 +383,7 @@ class ManualJobSearch:
         async def fetch_ats(source):
             async with semaphore:
                 try:
-                    timeout = self.cfg.jobspy_scan_timeout_seconds if source.name.startswith("jobspy:") else self.cfg.scan_source_timeout_seconds
+                    timeout = getattr(source, "timeout_seconds", self.cfg.scan_source_timeout_seconds) if source.name.startswith("jobspy:") else self.cfg.scan_source_timeout_seconds
                     items = await asyncio.wait_for(source.fetch(), timeout=timeout)
                     progress.live_available = True
                     await consume(items)

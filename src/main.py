@@ -1,12 +1,13 @@
 from __future__ import annotations
-import asyncio, csv, hmac, io, json, logging
+import asyncio, csv, hmac, io, json, logging, os, random, socket, uuid
 from datetime import datetime, timedelta, timezone
 from html import escape
+from urllib.parse import urlencode
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, File, Header, UploadFile
 from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 from .config import settings
 from .jobs import NormalizedJob
@@ -21,20 +22,22 @@ from .jobstreet_link import (
 )
 from .services import Pipeline, Repository
 from .sources import configured_sources
-from .applications import eligible_for_email, write_package, generate_cover_letter, cover_letter_metadata
+from .applications import write_package, generate_cover_letter, cover_letter_metadata
 from .ai import gemini
 from .security import ActionTokens
 from .brightdata import brightdata_sources
 from .jobstreet import brightdata_jobstreet_status, jobstreet_sources, jobstreet_status
 from .jobspy_source import jobspy_provider_status, jobspy_sources
+from .discovery import discover_sources
 from .manual_search import ManualJobSearch
 from .discord_bot import run_discord_bot
 from .resumes import extract_resume_text
-logging.basicConfig(level=logging.INFO,format='%(asctime)s %(levelname)s %(name)s %(message)s')
-cfg=settings(); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
+from .logging_config import configure_logging
+cfg=settings(); configure_logging(cfg.log_level); repo=Repository(cfg.database_url); pipeline=Pipeline(repo,cfg)
 manual_search=ManualJobSearch(cfg,repo)
 poll_lock=asyncio.Lock()
 cover_letter_locks: dict[int, asyncio.Lock] = {}
+worker_instance_id=f'{os.getenv("RENDER_SERVICE_ID") or socket.gethostname()}-{uuid.uuid4().hex[:10]}'
 def iso(value): return value.astimezone(timezone.utc).isoformat()
 def scheduler_snapshot():
     saved=repo.state('scheduler',{}) or {}
@@ -46,8 +49,24 @@ def scheduler_snapshot():
     if next_poll:
         try: seconds=max(0,int((datetime.fromisoformat(next_poll)-datetime.now(timezone.utc)).total_seconds()))
         except ValueError: pass
-        saved.update({'service_status':'online','status':saved.get('status','starting'),'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','indeed_status':jobspy_provider_status(cfg,health_rows,'indeed'),'google_jobs_status':jobspy_provider_status(cfg,health_rows,'google'),'jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg)})
+    heartbeat=(saved.get('worker_heartbeat_at') or (repo.state('scheduler_heartbeat',{}) or {}).get('at')); heartbeat_age=None
+    if heartbeat:
+        try: heartbeat_age=max(0,int((datetime.now(timezone.utc)-datetime.fromisoformat(heartbeat)).total_seconds()))
+        except ValueError: heartbeat_age=None
+    worker_status='HEALTHY' if heartbeat_age is not None and heartbeat_age <= cfg.worker_heartbeat_timeout_seconds else 'STALE'
+    saved.update({'service_status':'online','status':saved.get('status','starting'),'worker_status':worker_status,'worker_heartbeat_at':heartbeat,'worker_heartbeat_age_seconds':heartbeat_age,'last_poll_at':saved.get('last_poll_at'),'next_poll_at':next_poll,'seconds_until_next_poll':seconds,'sources_working':sum(x.status=='healthy' for x in source_rows),'recent_jobs_found':len(recent),'discord_status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED','database_status':'CONNECTED','linkedin_status':'READY' if cfg.brightdata_enabled and cfg.brightdata_api_token and cfg.brightdata_linkedin_jobs_dataset_id and cfg.brightdata_inputs('linkedin_jobs') else 'DISABLED','indeed_status':jobspy_provider_status(cfg,health_rows,'indeed'),'google_jobs_status':jobspy_provider_status(cfg,health_rows,'google'),'jobstreet_status':jobstreet_status(cfg,repo),'jobstreet_brightdata_status':brightdata_jobstreet_status(cfg),'source_registry_count':len(repo.source_registry_snapshot())})
     return saved
+
+def _merged_source_targets():
+    configured=cfg.source_targets
+    for target in configured:
+        repo.upsert_source_target(target,'configured')
+    merged=[]; seen=set()
+    for target in configured + repo.registry_targets():
+        key=(target.get('kind'),target.get('token') or target.get('site') or target.get('board') or target.get('company'))
+        if key in seen: continue
+        seen.add(key); merged.append(target)
+    return merged
 async def poll_once(manual=False):
     async with poll_lock:
         started=datetime.now(timezone.utc)
@@ -75,7 +94,22 @@ async def poll_once(manual=False):
             try: await pipeline.discord.update_status(repo,scheduler_snapshot())
             except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
         try:
-            pipeline.begin_cycle(); public_sources=configured_sources(cfg.source_targets); sources=public_sources+brightdata_sources(cfg,repo)+jobspy_sources(cfg,repo,force=manual)+jobstreet_sources(cfg,repo)
+            pipeline.begin_cycle()
+            discovery_state=repo.state('source_discovery',{}) or {}
+            should_discover=cfg.source_discovery_enabled
+            if discovery_state.get('completed_at'):
+                try: should_discover=(datetime.now(timezone.utc)-datetime.fromisoformat(discovery_state['completed_at'])).total_seconds() >= cfg.source_discovery_interval_seconds
+                except ValueError: should_discover=True
+            if should_discover:
+                repo.set_state('source_discovery',{'status':'running','started_at':iso(datetime.now(timezone.utc))})
+                try:
+                    discovered=await discover_sources(cfg,repo)
+                    repo.set_state('source_discovery',{'status':'healthy','completed_at':iso(datetime.now(timezone.utc)),'sources_discovered':len(discovered)})
+                except Exception as exc:
+                    repo.set_state('source_discovery',{'status':'degraded','completed_at':iso(datetime.now(timezone.utc)),'error':str(exc)})
+                    logging.warning('source_discovery_failed',extra={'error':str(exc)})
+            public_sources=configured_sources(_merged_source_targets())
+            sources=public_sources+brightdata_sources(cfg,repo)+jobspy_sources(cfg,repo,force=manual)+jobstreet_sources(cfg,repo)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             finished=datetime.now(timezone.utc)
             repo.set_state('scheduler',{'status':'error','phase':'complete','last_poll_at':iso(finished),'next_poll_at':scheduled_next if manual else iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),'jobs_checked':0,'new_recent_jobs':0,'alerts_sent':0,'sources_loaded':0,'source_config_error':str(exc)})
@@ -89,16 +123,21 @@ async def poll_once(manual=False):
                     if source.name == 'jobstreet:google-session'
                     else cfg.brightdata_linkedin_scan_timeout_seconds
                     if source.name == 'brightdata:linkedin_jobs'
-                    else cfg.jobspy_scan_timeout_seconds
+                    else getattr(source, 'timeout_seconds', cfg.scan_source_timeout_seconds)
                     if source.name.startswith('jobspy:')
                     else cfg.scan_source_timeout_seconds
                 )
                 try: return await asyncio.wait_for(pipeline.run_source(source),timeout=timeout)
                 except asyncio.TimeoutError:
-                    repo.health_failure(source.name,'scan source timeout')
                     return {'source':source.name,'discovered':0,'new':0,'filtered':0,'timeout':True,'success':False,'pages_fetched':0}
-        outcomes=await asyncio.gather(*(limited(source) for source in sources))
+                except Exception as exc:
+                    repo.health_failure(source.name,f'unhandled source error: {type(exc).__name__}')
+                    logging.exception('source_isolation_failed',extra={'source':source.name})
+                    return {'source':source.name,'discovered':0,'new':0,'filtered':0,'success':False,'error':type(exc).__name__,'pages_fetched':0}
+        outcomes=list(await asyncio.gather(*(limited(source) for source in sources), return_exceptions=False))
         await pipeline.retry_notifications()
+        digest_sender=getattr(pipeline,'send_digest',None)
+        digest_sent=await digest_sender() if digest_sender else 0
         finished=datetime.now(timezone.utc)
         checked=sum(x.get('discovered',0) for x in outcomes)
         new=sum(x.get('new',0) for x in outcomes)
@@ -106,7 +145,8 @@ async def poll_once(manual=False):
         state={
             'status':'running','phase':'complete','last_poll_at':iso(finished),
             'next_poll_at':scheduled_next if manual else iso(finished+timedelta(seconds=cfg.poll_interval_seconds)),
-            'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':pipeline._cycle_notifications,
+            'jobs_checked':checked,'new_recent_jobs':new,'alerts_sent':getattr(pipeline,'_cycle_delivered',0) + digest_sent,
+            'alerts_queued':pipeline._cycle_notifications,
             'duplicates_ignored':sum(x.get('duplicates_removed',0) for x in outcomes),
             'sources_loaded':len(sources),
             'sources_attempted':len(sources),
@@ -119,7 +159,9 @@ async def poll_once(manual=False):
             'computer_related_jobs':sum(x.get('computer_related',0) for x in outcomes),
             'entry_level_compatible':sum(x.get('entry_level_compatible',0) for x in outcomes),
             'qualifying_jobs':sum(x.get('qualifying',0) for x in outcomes),
+            'malformed_jobs_skipped':sum(x.get('malformed_jobs',0) for x in outcomes),
             'new_database_records':new,
+            'updated_database_records':sum(x.get('jobs_updated',0) for x in outcomes),
             'qualifying_alerts':pipeline._cycle_notifications,
             'source_funnels':{
                 item['source']:{
@@ -148,19 +190,45 @@ async def poll_once(manual=False):
             except Exception as exc: logging.warning('discord_status_update_failed',extra={'error':str(exc)})
         return outcomes
 async def worker():
-    while True:
-        try:
-            await poll_once()
-        except Exception:
-            # A failed cycle must not kill the long-lived 15-minute scheduler.
-            logging.exception('automatic_poll_failed')
-        state=repo.state('scheduler',{}) or {}
-        next_poll=state.get('next_poll_at')
-        try:
-            delay=max(0,(datetime.fromisoformat(next_poll)-datetime.now(timezone.utc)).total_seconds()) if next_poll else cfg.poll_interval_seconds
-        except (TypeError, ValueError):
-            delay=cfg.poll_interval_seconds
-        await asyncio.sleep(delay)
+    acquired=False
+    try:
+        while True:
+            if not acquired:
+                acquired=await asyncio.to_thread(repo.acquire_worker_lease,worker_instance_id,cfg.worker_heartbeat_timeout_seconds)
+                if not acquired:
+                    await asyncio.sleep(min(60,cfg.poll_interval_seconds)); continue
+            await asyncio.to_thread(repo.set_state,'scheduler_heartbeat',{'at':iso(datetime.now(timezone.utc)),'instance_id':worker_instance_id})
+            try:
+                await poll_once()
+            except Exception:
+                logging.exception('automatic_poll_failed')
+            if not await asyncio.to_thread(repo.renew_worker_lease,worker_instance_id,cfg.worker_heartbeat_timeout_seconds):
+                logging.warning('discovery_worker_lease_lost')
+                acquired=False
+                continue
+            state=repo.state('scheduler',{}) or {}
+            next_poll=state.get('next_poll_at')
+            try:
+                delay=max(0,(datetime.fromisoformat(next_poll)-datetime.now(timezone.utc)).total_seconds()) if next_poll else cfg.poll_interval_seconds
+            except (TypeError, ValueError):
+                delay=cfg.poll_interval_seconds
+            delay += random.uniform(0,max(0,cfg.scheduler_jitter_seconds))
+            # Keep both the durable lease and observable heartbeat alive during
+            # the normal 15-minute wait. A one-shot sleep previously let the
+            # 120-second lease expire, allowing a second worker to begin the
+            # same cycle before the first process woke up.
+            remaining=delay
+            while remaining>0 and acquired:
+                step=min(30,remaining)
+                await asyncio.sleep(step)
+                remaining-=step
+                await asyncio.to_thread(repo.set_state,'scheduler_heartbeat',{'at':iso(datetime.now(timezone.utc)),'instance_id':worker_instance_id})
+                if not await asyncio.to_thread(repo.renew_worker_lease,worker_instance_id,cfg.worker_heartbeat_timeout_seconds):
+                    logging.warning('discovery_worker_lease_lost_during_wait')
+                    acquired=False
+    finally:
+        if acquired:
+            await asyncio.to_thread(repo.release_worker_lease,worker_instance_id)
 def discord_task_done(task):
     if task.cancelled(): return
     error=task.exception()
@@ -197,7 +265,10 @@ async def lifespan(app):
         else: await pipeline.discord.update_status(repo,scheduler_snapshot())
     except Exception as exc: logging.warning('discord_control_panel_update_failed',extra={'error':str(exc)})
     task=asyncio.create_task(worker()) if cfg.polling_enabled else None
-    bot_task=asyncio.create_task(discord_worker()) if cfg.discord_bot_token else None
+    # In a combined local process polling and the gateway run together. In the
+    # split Render deployment, the always-on worker owns both; the web process
+    # stays API-only and cannot strand the gateway when it sleeps/restarts.
+    bot_task=asyncio.create_task(discord_worker()) if cfg.discord_bot_token and cfg.polling_enabled else None
     if bot_task: bot_task.add_done_callback(discord_task_done)
     yield
     if task: task.cancel()
@@ -334,9 +405,7 @@ def jobstreet_connection_status(token: str):
 
 @app.get('/resume',response_class=HTMLResponse)
 def resume_status_page():
-    info=repo.resume_info()
-    current=f'<p><strong>Saved resume:</strong> {escape(info["filename"])}<br><strong>Uploaded:</strong> {escape(str(info["uploaded_at"]))}</p>' if info else '<p>No resume is saved in the database yet.</p>'
-    return HTMLResponse(f'<!doctype html><title>Resume</title><h1>Resume context</h1>{current}<p>The saved PDF and extracted text are used when generating cover letters. For security, resume upload links are issued privately through the bot owner command only.</p><p><a href="/">Back to job hunter</a></p>')
+    raise HTTPException(404,'resume management is available through a signed private Discord link')
 
 @app.get('/resume/{token}',response_class=HTMLResponse)
 def resume_upload_page(token:str):
@@ -360,7 +429,33 @@ def health():
     except Exception as e: raise HTTPException(503,detail='database unavailable') from e
     with repo.sessions() as s:
         sources=s.scalars(select(SourceHealth)).all()
-    return {'status':'ok','database':'ok','discord_configured':bool(cfg.discord_bot_token or cfg.discord_webhook_url),'discord_bot':repo.state('discord_bot_health',{'healthy':False}),'resume':repo.resume_info(),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'scheduler':scheduler_snapshot(),'ai':gemini().health(),'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures} for x in sources}}
+    scheduler=scheduler_snapshot(); failing=sum(x.status in {'unhealthy','degraded'} for x in sources); healthy=sum(x.status=='healthy' for x in sources)
+    notification_health={'configured':bool(cfg.discord_bot_token or cfg.discord_webhook_url),'status':'READY' if cfg.discord_bot_token or cfg.discord_webhook_url else 'DISABLED'}
+    state='ok' if (not cfg.worker_required or scheduler.get('worker_status')=='HEALTHY') else 'degraded'
+    return {'status':state,'database':'ok','worker':scheduler.get('worker_status'),'discord_configured':notification_health['configured'],'discord_bot':repo.state('discord_bot_health',{'healthy':False}),'secure_actions_configured':bool(cfg.app_secret_key and cfg.public_base_url),'gmail_configured':bool(cfg.google_client_id and cfg.google_client_secret),'notifications':notification_health,'scheduler':scheduler,'source_summary':{'total':len(sources),'healthy':healthy,'failing':failing},'sources':{x.source:{'status':x.status,'jobs':x.last_job_count,'last_success':x.last_success_at,'consecutive_failures':x.consecutive_failures,'health_score':x.health_score,'last_error':x.last_error} for x in sources},'source_registry':repo.source_registry_snapshot(),'ai':gemini().health()}
+
+@app.get('/live')
+def live():
+    return {'status':'ok','service':'job-discovery'}
+
+@app.get('/ready')
+def ready():
+    payload=health()
+    if payload['status'] != 'ok':
+        raise HTTPException(503,detail=payload)
+    return payload
+
+@app.get('/metrics')
+def metrics():
+    now=datetime.now(timezone.utc); hour=now-timedelta(hours=1); day=now-timedelta(days=1)
+    with repo.sessions() as s:
+        discovered_1h=s.scalar(select(func.count()).select_from(Job).where(Job.first_seen_at>=hour)) or 0
+        discovered_24h=s.scalar(select(func.count()).select_from(Job).where(Job.first_seen_at>=day)) or 0
+        matched_24h=s.scalar(select(func.count()).select_from(Job).where(Job.first_seen_at>=day,Job.score>=cfg.min_notify_score)) or 0
+        alerts_sent=s.scalar(select(func.count()).select_from(Job).where(Job.notification_state=='SENT',Job.last_notification_attempt>=day)) or 0
+        alerts_failed=s.scalar(select(func.count()).select_from(Job).where(Job.notification_state=='FAILED')) or 0
+    scheduler=scheduler_snapshot()
+    return {'api':'ok','database':'ok','worker':scheduler.get('worker_status'),'scheduler':scheduler,'sources':{'active':scheduler.get('sources_working',0),'failing':sum(1 for value in health()['sources'].values() if value['status'] in {'unhealthy','degraded'}),'registry':len(repo.source_registry_snapshot())},'jobs':{'discovered_1h':discovered_1h,'discovered_24h':discovered_24h,'matched_24h':matched_24h},'notifications':{'sent_24h':alerts_sent,'failed':alerts_failed}}
 async def manual_scan():
     if poll_lock.locked(): raise HTTPException(409,'scan already running')
     previous=repo.state('manual_scan',{}) or {}; now=datetime.now(timezone.utc)
@@ -385,16 +480,32 @@ def latest_page():
 @app.get('/help',response_class=HTMLResponse)
 def help_page():
     raise HTTPException(410,'Help is available in Discord with v!help')
+
+
+def _public_job(job: Job) -> dict:
+    """Expose job facts without private notes, emails, or generated letters."""
+    return {
+        'id':job.id,'source':job.source,'source_job_id':job.source_job_id,
+        'title':job.title,'company':job.company,'location':job.location,
+        'country':job.country,'work_setup':job.work_setup,'salary':job.salary,
+        'date_posted':job.date_posted,'employment_type':job.employment_type,
+        'seniority':job.seniority,'skills':job.skills,'category':job.category,
+        'score':job.score,'match_reasons':job.match_reasons,'warnings':job.warnings,
+        'url':job.url,'application_url':job.application_url,'is_active':job.is_active,
+    }
+
+
 @app.get('/jobs')
 def jobs(min_score:int=0,status:str|None=None,include_expired:bool=False):
     with repo.sessions() as s:
         q=select(Job).where(Job.score>=min_score)
         if status: q=q.where(Job.status==status)
         elif not include_expired: q=q.where(Job.status!=JobStatus.EXPIRED.value)
-        return s.scalars(q.order_by(Job.date_discovered.desc()).limit(200)).all()
+        rows=s.scalars(q.order_by(Job.date_discovered.desc()).limit(200)).all()
+        return [_public_job(job) for job in rows]
 
 @app.get('/jobs/table',response_class=HTMLResponse)
-def jobs_table(min_score:int=0, days:int=30, page:int=1, status:str|None=None):
+def jobs_table(min_score:int=0, days:int=30, page:int=1, status:str|None=None, role:str='', technology:str='', location:str='', remote:bool=False, provider:str='', company:str=''):
     """Public, read-only table of the current stored job matches.
 
     `jobs_checked` is a scan counter; this table deliberately shows only jobs
@@ -405,6 +516,12 @@ def jobs_table(min_score:int=0, days:int=30, page:int=1, status:str|None=None):
     with repo.sessions() as s:
         filters=[Job.status!=JobStatus.EXPIRED.value,Job.score>=min_score,Job.date_posted.is_not(None),Job.date_posted>=cutoff]
         if status: filters.append(Job.status==status.upper())
+        if role.strip(): filters.append(Job.title.ilike(f'%{role.strip()}%'))
+        if technology.strip(): filters.append(or_(Job.description.ilike(f'%{technology.strip()}%'),Job.requirements.ilike(f'%{technology.strip()}%')))
+        if location.strip(): filters.append(Job.location.ilike(f'%{location.strip()}%'))
+        if remote: filters.append(or_(Job.work_setup.ilike('%remote%'),Job.location.ilike('%remote%'),Job.location.ilike('%work from home%')))
+        if provider.strip(): filters.append(Job.source.ilike(f'{provider.strip()}:%'))
+        if company.strip(): filters.append(Job.company.ilike(f'%{company.strip()}%'))
         query=(select(Job).where(*filters)
                .order_by(Job.date_posted.desc()).offset((page-1)*page_size).limit(page_size))
         rows=s.scalars(query).all()
@@ -420,9 +537,14 @@ def jobs_table(min_score:int=0, days:int=30, page:int=1, status:str|None=None):
         f'<tr><td>{posted(job.date_posted)}</td><td><a class="role" href="/jobs/{job.id}/timeline"><strong>{escape(job.title)}</strong></a><br><span>{escape(job.company)}</span></td><td>{escape(job.location or "Not stated")}</td><td>{job.score}%</td><td>{escape(job.status)}</td><td>{listing(job.application_url or job.url)}</td></tr>'
         for job in rows
     ) or '<tr><td colspan="6" class="empty">No recent stored matches meet these filters yet.</td></tr>'
-    query_args=f'min_score={min_score}&days={days}' + (f'&status={escape(status,quote=True)}' if status else '')
+    query_values={'min_score':min_score,'days':days,'role':role,'technology':technology,'location':location,'provider':provider,'company':company}
+    if status: query_values['status']=status
+    if remote: query_values['remote']='true'
+    query_args=urlencode(query_values)
     next_link=f'<a href="/jobs/table?{query_args}&page={page+1}">Next page →</a>' if len(rows)==page_size else ''
     status_chips=' '.join(f'<a class="chip" href="/jobs/table?min_score={min_score}&days={days}&status={key}">{escape(key.title())}: {value}</a>' for key,value in sorted(totals.items()))
+    filters_html=f'''<form method="get" style="display:flex;gap:8px;flex-wrap:wrap;margin:18px 0"><input name="role" placeholder="Role" value="{escape(role,quote=True)}"><input name="technology" placeholder="Technology" value="{escape(technology,quote=True)}"><input name="location" placeholder="Location" value="{escape(location,quote=True)}"><input name="provider" placeholder="Provider" value="{escape(provider,quote=True)}"><input name="company" placeholder="Company" value="{escape(company,quote=True)}"><input name="min_score" type="number" min="0" max="100" value="{min_score}" title="Minimum score"><input name="days" type="number" min="1" max="90" value="{days}" title="Posted within days"><label><input name="remote" type="checkbox" value="true" {'checked' if remote else ''}> Remote</label><button>FILTER</button></form>'''
+    status_chips=filters_html+status_chips
     return HTMLResponse(f'''<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>After Hours Job Hunter — Jobs</title><style>
 body{{margin:0;background:#130606;color:#f7eee8;font:15px system-ui,-apple-system,Segoe UI,sans-serif}}main{{max-width:1180px;margin:auto;padding:28px 18px}}h1{{margin:0;color:#ff7f00;font-size:24px}}p{{color:#cbbdb4}}.meta{{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0}}.chip{{background:#2a1714;border:1px solid #5b2c20;padding:7px 10px;border-radius:6px;text-decoration:none;color:#f7eee8}}table{{width:100%;border-collapse:collapse;background:#21100e;border-left:4px solid #ff7f00}}th,td{{padding:13px 12px;text-align:left;border-bottom:1px solid #48231c;vertical-align:top}}th{{color:#ffb36b;font-size:12px;letter-spacing:.06em}}td span{{color:#cbbdb4;font-size:13px}}.view{{color:#fff;background:#b94d10;text-decoration:none;padding:7px 9px;border-radius:4px;font-size:12px;font-weight:700}}.role{{color:#f7eee8;text-decoration:none}}.empty{{color:#cbbdb4;text-align:center;padding:32px}}a{{color:#ffb36b}}@media(max-width:720px){{main{{padding:18px 10px}}th:nth-child(3),td:nth-child(3),th:nth-child(5),td:nth-child(5){{display:none}}th,td{{padding:11px 8px}}}}</style></head><body><main><h1>AFTER HOURS JOB HUNTER</h1><p>Recent stored job matches, ordered by the employer’s posted date. This page is read-only and never submits an application.</p><div class="meta"><span class="chip">Last {days} days</span><span class="chip">Minimum match: {min_score}%</span><span class="chip">Page {page}</span><a class="chip" href="/jobs/table?min_score=60&days=30">60%+ matches</a><a class="chip" href="/jobs/export.csv?min_score={min_score}&days={days}">DOWNLOAD CSV</a>{status_chips}</div><table><thead><tr><th>POSTED</th><th>ROLE / COMPANY</th><th>LOCATION</th><th>MATCH</th><th>STATUS</th><th>LISTING</th></tr></thead><tbody>{table_rows}</tbody></table><p>{next_link}</p><p>After Hours Job Hunter • Made by masoncalix</p></main></body></html>''')
 
@@ -493,25 +615,24 @@ async def canonical_cover_letter(job_id: int, regenerate: bool = False):
 def latest_jobs(limit:int=10):
     with repo.sessions() as s:
         cutoff=datetime.now(timezone.utc)-timedelta(days=90)
-        return s.scalars(select(Job).where(
+        rows=s.scalars(select(Job).where(
             Job.status!=JobStatus.EXPIRED.value,
             Job.score>=cfg.min_notify_score,
             Job.date_posted.is_not(None),
             Job.date_posted>=cutoff,
         ).order_by(Job.date_posted.desc(),Job.score.desc()).limit(max(1,min(limit,25)))).all()
+        return [_public_job(job) for job in rows]
 @app.patch('/jobs/{job_id}/status')
-def update_status(job_id:int, update:StatusUpdate):
+def update_status(job_id:int, update:StatusUpdate, x_admin_token: str | None = Header(default=None)):
+    if not cfg.admin_api_token or not x_admin_token or not hmac.compare_digest(x_admin_token,cfg.admin_api_token):
+        raise HTTPException(404,'status updates are available through signed Discord actions')
     with repo.sessions() as s:
         job=s.get(Job,job_id)
         if not job: raise HTTPException(404,'job not found')
-        job.status=update.status.value; s.commit(); return job
+        job.status=update.status.value; s.commit(); return {'id':job.id,'status':job.status}
 @app.post('/jobs/{job_id}/prepare-application')
 async def prepare_application(job_id:int):
-    job, result=await canonical_cover_letter(job_id)
-    # File generation is intentionally separate from sending; OAuth email sending remains opt-in.
-    resume=repo.resume_record()
-    path=write_package(job,letter=result.text,resume_bytes=resume['file_data'] if resume else None,resume_filename=resume['filename'] if resume else None); eligible,reason=eligible_for_email(job,cfg.min_auto_application_score)
-    return {'path':str(path),'generation_method':result.method,'email_eligible':eligible,'reason':reason,'auto_send_enabled':cfg.auto_send_email_applications}
+    raise HTTPException(410,'application preparation is available through signed Discord actions')
 def action_job(token:str):
     payload=ActionTokens(cfg).verify(token)
     if not payload: raise HTTPException(403,'invalid or expired action link')
@@ -546,9 +667,13 @@ async def action_post(token:str):
     raise HTTPException(400,'unsupported action')
 @app.get('/source-runs')
 def source_runs():
-    with repo.sessions() as s: return s.scalars(select(SourceRun).order_by(SourceRun.id.desc()).limit(100)).all()
+    with repo.sessions() as s:
+        rows=s.scalars(select(SourceRun).order_by(SourceRun.id.desc()).limit(100)).all()
+        return [{'id':row.id,'source':row.source,'started_at':row.started_at,'completed_at':row.completed_at,'discovered':row.discovered,'new_jobs':row.new_jobs,'filtered':row.filtered,'jobs_updated':row.jobs_updated,'duplicates':row.duplicates,'duration_seconds':row.duration_seconds,'status':row.status,'success':row.success} for row in rows]
 @app.post('/fixtures/smoke')
-async def smoke():
+async def smoke(x_admin_token: str | None = Header(default=None)):
+    if not cfg.enable_fixture_routes or not cfg.admin_api_token or not x_admin_token or not hmac.compare_digest(x_admin_token,cfg.admin_api_token):
+        raise HTTPException(404,'fixture routes are disabled')
     item=NormalizedJob(source='fixture',source_job_id='junior-devops-001',title='Junior DevOps Engineer',company='Fixture Cloud Inc',location='Makati, Philippines — Hybrid',description='Fresh graduate role. AWS Docker Terraform Linux CI/CD GitHub Actions Kubernetes.',url='https://example.invalid/jobs/junior-devops-001')
     job, accepted=await pipeline.process(item)
     return {'accepted':accepted,'created':bool(job),'job_id':job.id if job else None}

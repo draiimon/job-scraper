@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 from functools import lru_cache
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from dotenv import dotenv_values
 
@@ -11,11 +12,12 @@ class Settings(BaseSettings):
     # variables.  Empty values must behave like unset values so defaults such
     # as the 15-minute scheduler interval remain active.
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_ignore_empty=True)
-    database_url: str = "sqlite:///./data/job_agent.sqlite3"
-    discord_webhook_url: str | None = None
-    discord_bot_token: str | None = None
+    database_url: str = Field("sqlite:///./data/job_agent.sqlite3", repr=False)
+    discord_webhook_url: str | None = Field(None, repr=False)
+    discord_bot_token: str | None = Field(None, repr=False)
     discord_bot_guild_id: str | None = None
     discord_control_channel_id: str | None = None
+    discord_digest_channel_id: str | None = None
     # Optional explicit Discord user ID allowed to access private resume and
     # application controls. If unset, the Discord server owner is used.
     discord_owner_id: str | None = None
@@ -23,40 +25,65 @@ class Settings(BaseSettings):
     discord_alert_role_id: str | None = "1345727357662658603"
     discord_motivation: str = ""
     discord_motivations_json: str = ""
-    min_notify_score: int = 70
-    min_auto_application_score: int = 85
-    max_notifications_per_cycle: int = 10
+    min_notify_score: int = Field(60, ge=0, le=100)
+    min_auto_application_score: int = Field(85, ge=0, le=100)
+    max_notifications_per_cycle: int = Field(1000, ge=1, le=10000)
+    instant_alert_score: int = Field(80, ge=0, le=100)
+    notification_batch_size: int = Field(8, ge=1, le=10)
+    notification_retry_max_attempts: int = Field(6, ge=1, le=20)
+    notification_retry_base_seconds: int = Field(30, ge=1, le=3600)
+    digest_enabled: bool = True
+    digest_interval_seconds: int = 21600
     manual_scan_cooldown_seconds: int = 300
-    scan_source_concurrency: int = 6
-    scan_source_timeout_seconds: int = 15
+    scan_source_concurrency: int = Field(6, ge=1, le=20)
+    scan_source_timeout_seconds: int = Field(90, ge=10, le=600)
     auto_send_email_applications: bool = False
     polling_enabled: bool = True
-    poll_interval_seconds: int = 900
+    worker_required: bool = True
+    poll_interval_seconds: int = Field(900, ge=300, le=86400)
+    scheduler_jitter_seconds: int = 90
+    worker_heartbeat_timeout_seconds: int = 1800
     app_timezone: str = "Asia/Manila"
-    app_secret_key: str | None = None
+    app_secret_key: str | None = Field(None, repr=False)
     public_base_url: str | None = None
+    admin_api_token: str | None = Field(None, repr=False)
+    enable_fixture_routes: bool = False
     cover_letter_mode: str = "ai"
     source_targets_json: str = ""
     source_config_path: str = "config/job_sources.json"
     google_client_id: str | None = None
-    google_client_secret: str | None = None
+    google_client_secret: str | None = Field(None, repr=False)
+    google_redirect_uri: str | None = None
+    host: str = "0.0.0.0"
+    port: int = 8000
+    log_level: str = "INFO"
     profile_path: str = "data/master-profile.json"
     resume_path: str | None = None
     application_dry_run: bool = True
     ai_enabled: bool = True
     ai_provider: str | None = None
-    ai_api_key: str | None = None
+    ai_api_key: str | None = Field(None, repr=False)
     ai_model: str | None = None
     ai_daily_request_limit: int = 20
     ai_min_job_score: int = 75
     gemini_key_projects_json: str = ""
+    gemini_api_key: str | None = Field(None, repr=False)
+    gemini_api_keys: str = Field("", repr=False)
+    gemini_api_key2: str | None = Field(None, repr=False)
+    gemini_api_key3: str | None = Field(None, repr=False)
+    gemini_api_key4: str | None = Field(None, repr=False)
+    gemini_api_key5: str | None = Field(None, repr=False)
+    gemini_api_key6: str | None = Field(None, repr=False)
+    gemini_api_key7: str | None = Field(None, repr=False)
+    gemini_api_key8: str | None = Field(None, repr=False)
+    gemini_api_key9: str | None = Field(None, repr=False)
     gemini_model: str = "gemini-3.8-flash"
     gemini_max_retries: int = 3
     gemini_concurrency_limit: int = 2
     gemini_request_timeout_seconds: int = 15
     gemini_total_timeout_seconds: int = 45
     brightdata_enabled: bool = False
-    brightdata_api_token: str | None = None
+    brightdata_api_token: str | None = Field(None, repr=False)
     # Bright Data's documented LinkedIn keyword-discovery dataset. It is only
     # called when BRIGHTDATA_ENABLED=true and a token is configured.
     brightdata_linkedin_jobs_dataset_id: str | None = "gd_lpfll7v5hcqtkxl6l"
@@ -69,22 +96,29 @@ class Settings(BaseSettings):
     brightdata_jobstreet_monthly_page_limit: int = 250
     brightdata_linkedin_monthly_request_limit: int = 100
     # JobSpy is limited to public Indeed Philippines and Google Jobs discovery.
-    # It has a provider-specific interval so the global 15-minute scheduler
-    # does not repeatedly hammer either board.
+    # These defaults work without an API key or any third-party credential.
     jobspy_enabled: bool = True
     jobspy_indeed_enabled: bool = True
     jobspy_google_enabled: bool = True
-    jobspy_results_per_query: int = 12
-    jobspy_queries_per_cycle: int = 4
-    jobspy_request_concurrency: int = 2
-    jobspy_min_interval_seconds: int = 3600
-    jobspy_manual_min_interval_seconds: int = 900
-    jobspy_max_age_days: int = 90
-    jobspy_scan_timeout_seconds: int = 75
+    jobspy_country: str = "Philippines"
+    jobspy_results_per_query: int = 50
+    jobspy_request_timeout: int = 30
+    jobspy_max_concurrency: int = 2
+    jobspy_proxies: str | None = None
+    jobspy_user_agent: str | None = None
+    source_discovery_enabled: bool = True
+    source_discovery_interval_seconds: int = 21600
+    source_discovery_seeds_json: str = ""
+    source_discovery_seed_path: str = "config/discovery_seeds.json"
+    source_discovery_max_seeds: int = 50
+    source_discovery_timeout_seconds: int = 15
+    source_discovery_search_enabled: bool = True
+    source_discovery_search_queries_json: str = ""
+    source_discovery_max_search_results: int = 50
     jobstreet_session_path: str = "data/private/jobstreet_session.json"
     # Optional Render secret: base64-encoded Playwright storage state created
     # locally through `python -m src.jobstreet_auth`. Never log this value.
-    jobstreet_session_state_b64: str | None = None
+    jobstreet_session_state_b64: str | None = Field(None, repr=False)
     jobstreet_enabled: bool = True
     jobstreet_base_url: str = "https://ph.jobstreet.com"
     jobstreet_login_url: str = ""

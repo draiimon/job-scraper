@@ -69,6 +69,13 @@ JOBSPY_PH_LOCATIONS: tuple[str, ...] = (
     "Davao, Philippines",
 )
 
+# These are deliberately code defaults, not deployment knobs. They keep the
+# existing 15-minute scheduler safe while rotating enough coverage each hour.
+JOBSPY_QUERIES_PER_CYCLE = 4
+JOBSPY_MAX_AGE_DAYS = 90
+JOBSPY_MIN_INTERVAL_SECONDS = 3600
+JOBSPY_MANUAL_MIN_INTERVAL_SECONDS = 900
+
 
 @dataclass(frozen=True)
 class JobSpyPlan:
@@ -128,6 +135,8 @@ def _rows_from_result(result: Any) -> list[dict[str, Any]]:
 
 
 def _error_category(error: Exception) -> str:
+    if isinstance(error, TimeoutError):
+        return "timeout"
     text = str(error).lower()
     if "429" in text or "rate limit" in text or "too many" in text:
         return "rate_limited"
@@ -170,9 +179,9 @@ def _scheduled_due(cfg: Settings, repo: Any, provider: str, force: bool) -> bool
     # public-board limits. A first manual scan can participate immediately;
     # repeated clicks remain bounded independently of the 15-minute scheduler.
     minimum = (
-        cfg.jobspy_manual_min_interval_seconds
+        JOBSPY_MANUAL_MIN_INTERVAL_SECONDS
         if force
-        else cfg.jobspy_min_interval_seconds
+        else JOBSPY_MIN_INTERVAL_SECONDS
     )
     return (datetime.now(timezone.utc) - previous).total_seconds() >= minimum
 
@@ -190,7 +199,7 @@ def _scheduled_plans(cfg: Settings, repo: Any, provider: str) -> list[JobSpyPlan
         for family_offset in range(len(JOBSPY_QUERY_FAMILIES))
         for location_index, location in enumerate(JOBSPY_PH_LOCATIONS)
     ]
-    limit = max(1, min(cfg.jobspy_queries_per_cycle, len(plans)))
+    limit = max(1, min(JOBSPY_QUERIES_PER_CYCLE, len(plans)))
     if repo is None:
         return plans[:limit]
     cursor_state = repo.state(_cursor_key(provider), {})
@@ -249,12 +258,16 @@ class JobSpySource(Source):
             "description_format": "markdown",
             "verbose": 0,
         }
+        if self.cfg.jobspy_proxies:
+            common["proxies"] = self.cfg.jobspy_proxies
+        if self.cfg.jobspy_user_agent:
+            common["user_agent"] = self.cfg.jobspy_user_agent
         if self.provider == "indeed":
             # The package documents Philippines as the exact country value.
             # Do not combine Indeed's hours filter with remote-only filters.
             common.update(
-                country_indeed="Philippines",
-                hours_old=self.cfg.jobspy_max_age_days * 24,
+                country_indeed=self.cfg.jobspy_country,
+                hours_old=JOBSPY_MAX_AGE_DAYS * 24,
             )
         else:
             # Google Jobs uses its own query string; it is intentionally not
@@ -314,9 +327,20 @@ class JobSpySource(Source):
         async with semaphore:
             self.pages_fetched += 1
             try:
-                return _rows_from_result(await asyncio.to_thread(self._scrape_sync, plan)), None
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(self._scrape_sync, plan),
+                    timeout=max(1, self.cfg.jobspy_request_timeout),
+                )
+                return _rows_from_result(result), None
             except Exception as error:
                 return [], _error_category(error)
+
+    @property
+    def timeout_seconds(self) -> int:
+        """Whole-source budget derived from per-request timeout and batches."""
+        concurrency=max(1, min(self.cfg.jobspy_max_concurrency, 2))
+        batches=max(1, math.ceil(len(self.plans) / concurrency))
+        return max(self.cfg.scan_source_timeout_seconds, self.cfg.jobspy_request_timeout * batches + 5)
 
     async def fetch(self) -> list[NormalizedJob]:
         self.pages_fetched = self.raw_jobs_discovered = self.normalized_jobs = 0
@@ -329,7 +353,7 @@ class JobSpySource(Source):
                 {"attempted_at": datetime.now(timezone.utc).isoformat()},
             )
 
-        semaphore = asyncio.Semaphore(max(1, min(self.cfg.jobspy_request_concurrency, 2)))
+        semaphore = asyncio.Semaphore(max(1, min(self.cfg.jobspy_max_concurrency, 2)))
         outcomes = await asyncio.gather(*(self._fetch_plan(plan, semaphore) for plan in self.plans))
         records: list[dict[str, Any]] = []
         errors: list[str] = []
@@ -343,6 +367,12 @@ class JobSpySource(Source):
         if errors:
             self.last_error_category = errors[0]
             self.degraded = bool(jobs or len(errors) < len(outcomes))
+            # A board-side 429 is temporary capacity pressure, not a broken
+            # application source. Keep the canonical scheduler moving and
+            # surface it as DEGRADED until the next protected interval.
+            if all(error == "rate_limited" for error in errors):
+                self.degraded = True
+                return jobs
             if not jobs and len(errors) == len(outcomes):
                 raise SourceError(f"JobSpy {self.provider} unavailable ({self.last_error_category})")
         elif self.provider == "google" and not jobs:
@@ -383,7 +413,7 @@ def jobspy_manual_sources(cfg: Settings, role: str, location: str) -> list[JobSp
     """Targeted JobSpy requests for the existing v!search path only."""
     if not cfg.jobspy_enabled:
         return []
-    plan = JobSpyPlan(role.strip()[:160], location.strip()[:160] or "Philippines")
+    plan = JobSpyPlan(role.strip()[:160], location.strip()[:160] or cfg.jobspy_country)
     sources: list[JobSpySource] = []
     if cfg.jobspy_indeed_enabled:
         sources.append(JobSpySource("indeed", cfg, plans=[plan]))

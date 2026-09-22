@@ -7,7 +7,10 @@ import pytest
 from src.config import Settings
 from src.jobs import NormalizedJob, evaluate, is_ph_location
 from src.jobspy_source import (
+    JOBSPY_MANUAL_MIN_INTERVAL_SECONDS,
+    JOBSPY_MAX_AGE_DAYS,
     JOBSPY_PH_LOCATIONS,
+    JOBSPY_QUERIES_PER_CYCLE,
     JobSpyPlan,
     JobSpySource,
     jobspy_manual_sources,
@@ -51,10 +54,8 @@ def cfg(tmp_path=None, **overrides):
     values = {
         "jobspy_enabled": True,
         "jobspy_results_per_query": 3,
-        "jobspy_queries_per_cycle": 2,
-        "jobspy_min_interval_seconds": 21600,
-        "jobspy_request_concurrency": 1,
-        "jobspy_max_age_days": 90,
+        "jobspy_max_concurrency": 1,
+        "jobspy_request_timeout": 10,
         "discord_webhook_url": None,
         "discord_bot_token": None,
     }
@@ -86,7 +87,7 @@ async def test_indeed_normalizes_direct_url_ph_code_and_provider_metadata(tmp_pa
     assert is_ph_location(job)
     assert calls[0]["site_name"] == ["indeed"]
     assert calls[0]["country_indeed"] == "Philippines"
-    assert calls[0]["hours_old"] == 90 * 24
+    assert calls[0]["hours_old"] == JOBSPY_MAX_AGE_DAYS * 24
     assert "proxies" not in calls[0]
 
 
@@ -144,13 +145,14 @@ async def test_jobspy_partial_provider_failure_is_degraded_but_isolated(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_jobspy_all_provider_failures_raise_safe_category(tmp_path):
+async def test_jobspy_rate_limit_is_degraded_without_blocking_the_pipeline(tmp_path):
     def scraper(**_kwargs):
         raise RuntimeError("HTTP 429 rate limit")
 
     source = JobSpySource("google", cfg(tmp_path), plans=[JobSpyPlan("qa", "Philippines")], scraper=scraper)
-    with pytest.raises(SourceError, match="rate_limited"):
-        await source.fetch()
+    assert await source.fetch() == []
+    assert source.degraded
+    assert source.last_error_category == "rate_limited"
 
 
 def test_scheduled_sources_are_only_indeed_and_google_and_rotate_safely(tmp_path):
@@ -165,8 +167,9 @@ def test_scheduled_sources_are_only_indeed_and_google_and_rotate_safely(tmp_path
     assert "Remote Philippines" in JOBSPY_PH_LOCATIONS
     assert "Remote" in JOBSPY_PH_LOCATIONS
     assert "Work From Home, Philippines" in JOBSPY_PH_LOCATIONS
+    assert len(first[0].plans) == JOBSPY_QUERIES_PER_CYCLE
     assert [plan.location for plan in first[0].plans] == [
-        "Philippines", "Metro Manila, Philippines"
+        "Philippines", "Metro Manila, Philippines", "Remote Philippines", "Remote"
     ]
 
     now = datetime.now(timezone.utc).isoformat()
@@ -175,7 +178,7 @@ def test_scheduled_sources_are_only_indeed_and_google_and_rotate_safely(tmp_path
     assert jobspy_sources(configuration, repo) == []
     # A protected manual scan cannot hammer a provider that was just checked.
     assert jobspy_sources(configuration, repo, force=True) == []
-    older = (datetime.now(timezone.utc) - timedelta(seconds=configuration.jobspy_manual_min_interval_seconds + 1)).isoformat()
+    older = (datetime.now(timezone.utc) - timedelta(seconds=JOBSPY_MANUAL_MIN_INTERVAL_SECONDS + 1)).isoformat()
     repo.set_state("jobspy_schedule:indeed", {"attempted_at": older})
     repo.set_state("jobspy_schedule:google", {"attempted_at": older})
     assert [source.name for source in jobspy_sources(configuration, repo, force=True)] == ["jobspy:indeed_ph", "jobspy:google_jobs"]
@@ -324,6 +327,7 @@ def test_expiry_keeps_31_to_90_day_jobs_but_expires_older_records(tmp_path):
     assert repo.expire_stale_jobs() == 1
     assert repo.by_fingerprint(within_window.fingerprint).status == JobStatus.NEW.value
     assert repo.by_fingerprint(too_old.fingerprint).status == JobStatus.EXPIRED.value
+    assert repo.by_fingerprint(too_old.fingerprint).is_active is False
 
 
 @pytest.mark.asyncio

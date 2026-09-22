@@ -1,5 +1,5 @@
 from __future__ import annotations
-import asyncio, logging, random, json, re
+import asyncio, hashlib, logging, random, json, re, time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -8,8 +8,8 @@ from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 from .config import Settings
-from .jobs import NormalizedJob, canonicalize_url, clean, evaluate, extract_skills, is_ph_location, freshness, is_active_listing
-from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, AppSetting, ResumeProfile, JobEvent
+from .jobs import NormalizedJob, canonicalize_url, clean, enrich_canonical, evaluate, extract_skills, is_ph_location, freshness, is_active_listing
+from .models import Base, Job, JobStatus, SourceRun, SourceHealth, AppState, AppSetting, ResumeProfile, JobEvent, JobCompany, JobSource
 from .security import ActionTokens
 log=logging.getLogger(__name__)
 DISCORD_ALERT_ROLE_ALLOWLIST={'1345727357662658603'}
@@ -52,16 +52,62 @@ class Repository:
         # widening-only migration for databases created before scan counters
         # were persisted in the scheduler snapshot.
         if self.engine.dialect.name == 'postgresql':
+            app_state_columns = {column['name']: column for column in inspect(self.engine).get_columns('app_state')}
+            job_columns = {column['name'] for column in inspect(self.engine).get_columns('jobs')}
+            health_columns = {column['name'] for column in inspect(self.engine).get_columns('source_health')}
+            run_columns = {column['name'] for column in inspect(self.engine).get_columns('source_runs')}
+            existing_by_table = {
+                'jobs': job_columns,
+                'source_runs': run_columns,
+                'source_health': health_columns,
+            }
             with self.engine.begin() as connection:
-                connection.execute(text('ALTER TABLE app_state ALTER COLUMN value TYPE TEXT'))
-                connection.execute(text('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMP WITH TIME ZONE'))
-                connection.execute(text('UPDATE jobs SET last_seen_at = date_discovered WHERE last_seen_at IS NULL'))
-                connection.execute(text('ALTER TABLE jobs ADD COLUMN IF NOT EXISTS identity_key VARCHAR(64)'))
-                connection.execute(text("UPDATE jobs SET identity_key = fingerprint WHERE identity_key IS NULL OR identity_key = ''"))
+                connection.execute(text("SET LOCAL lock_timeout = '10s'"))
+                connection.execute(text("SET LOCAL statement_timeout = '60s'"))
+                if app_state_columns and str(app_state_columns.get('value',{}).get('type','')).upper() != 'TEXT':
+                    connection.execute(text('ALTER TABLE app_state ALTER COLUMN value TYPE TEXT'))
+                if 'last_seen_at' not in job_columns:
+                    connection.execute(text('ALTER TABLE jobs ADD COLUMN last_seen_at TIMESTAMP WITH TIME ZONE'))
+                    connection.execute(text('UPDATE jobs SET last_seen_at = date_discovered WHERE last_seen_at IS NULL'))
+                if 'identity_key' not in job_columns:
+                    connection.execute(text('ALTER TABLE jobs ADD COLUMN identity_key VARCHAR(64)'))
+                    connection.execute(text("UPDATE jobs SET identity_key = fingerprint WHERE identity_key IS NULL OR identity_key = ''"))
                 connection.execute(text('CREATE INDEX IF NOT EXISTS ix_jobs_identity_key ON jobs (identity_key)'))
-                connection.execute(text('ALTER TABLE source_health ADD COLUMN IF NOT EXISTS last_raw_jobs INTEGER DEFAULT 0'))
-                connection.execute(text('ALTER TABLE source_health ADD COLUMN IF NOT EXISTS last_normalized_jobs INTEGER DEFAULT 0'))
-                connection.execute(text('ALTER TABLE source_health ADD COLUMN IF NOT EXISTS last_accepted_jobs INTEGER DEFAULT 0'))
+                if 'last_raw_jobs' not in health_columns: connection.execute(text('ALTER TABLE source_health ADD COLUMN last_raw_jobs INTEGER DEFAULT 0'))
+                if 'last_normalized_jobs' not in health_columns: connection.execute(text('ALTER TABLE source_health ADD COLUMN last_normalized_jobs INTEGER DEFAULT 0'))
+                if 'last_accepted_jobs' not in health_columns: connection.execute(text('ALTER TABLE source_health ADD COLUMN last_accepted_jobs INTEGER DEFAULT 0'))
+                for table, columns in {
+                    'jobs': {
+                        'company_domain': 'VARCHAR(255)', 'country': 'VARCHAR(80)', 'requirements': "TEXT NOT NULL DEFAULT ''",
+                        'salary_min': 'DOUBLE PRECISION', 'salary_max': 'DOUBLE PRECISION', 'salary_currency': 'VARCHAR(8)',
+                        'posted_at': 'TIMESTAMP WITH TIME ZONE', 'first_seen_at': 'TIMESTAMP WITH TIME ZONE',
+                        'updated_at': 'TIMESTAMP WITH TIME ZONE', 'expires_at': 'TIMESTAMP WITH TIME ZONE',
+                        'experience_min': 'DOUBLE PRECISION', 'experience_max': 'DOUBLE PRECISION', 'category': 'VARCHAR(80)',
+                        'notification_attempts': 'INTEGER NOT NULL DEFAULT 0', 'last_notification_attempt': 'TIMESTAMP WITH TIME ZONE',
+                        'notification_next_attempt_at': 'TIMESTAMP WITH TIME ZONE', 'notification_error': 'TEXT',
+                        'content_hash': 'VARCHAR(64)', 'source_hash': 'VARCHAR(64)', 'is_active': 'BOOLEAN NOT NULL DEFAULT TRUE',
+                        'is_duplicate': 'BOOLEAN NOT NULL DEFAULT FALSE', 'duplicate_of': 'INTEGER',
+                    },
+                    'source_runs': {
+                        'jobs_updated': 'INTEGER NOT NULL DEFAULT 0', 'duplicates': 'INTEGER NOT NULL DEFAULT 0',
+                        'duration_seconds': 'DOUBLE PRECISION', 'status': "VARCHAR(24) NOT NULL DEFAULT 'RUNNING'",
+                    },
+                    'source_health': {
+                        'health_score': 'DOUBLE PRECISION NOT NULL DEFAULT 1', 'last_duration_seconds': 'DOUBLE PRECISION',
+                        'last_new_jobs': 'INTEGER NOT NULL DEFAULT 0', 'last_duplicates': 'INTEGER NOT NULL DEFAULT 0',
+                    },
+                }.items():
+                    # Never inspect through a second pooled connection while this
+                    # transaction owns an ALTER TABLE lock. PostgreSQL makes the
+                    # inspector wait for this transaction, producing a self-
+                    # deadlock during startup.
+                    existing = existing_by_table[table]
+                    for name, ddl in columns.items():
+                        if name not in existing:
+                            connection.execute(text(f'ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {ddl}'))
+                connection.execute(text('UPDATE jobs SET posted_at = date_posted WHERE posted_at IS NULL'))
+                connection.execute(text('UPDATE jobs SET first_seen_at = date_discovered WHERE first_seen_at IS NULL'))
+                connection.execute(text('UPDATE jobs SET is_active = FALSE WHERE status = \'EXPIRED\''))
         elif self.engine.dialect.name == 'sqlite':
             columns = inspect(self.engine).get_columns('app_state')
             value_column = next((column for column in columns if column['name'] == 'value'), None)
@@ -99,6 +145,43 @@ class Repository:
                 if name not in health_columns:
                     with self.engine.begin() as connection:
                         connection.exec_driver_sql(f'ALTER TABLE source_health ADD COLUMN {name} INTEGER DEFAULT 0')
+            sqlite_columns = {
+                'jobs': {
+                    'company_domain': 'VARCHAR(255)', 'country': 'VARCHAR(80)', 'requirements': "TEXT NOT NULL DEFAULT ''",
+                    'salary_min': 'FLOAT', 'salary_max': 'FLOAT', 'salary_currency': 'VARCHAR(8)', 'posted_at': 'DATETIME',
+                    'first_seen_at': 'DATETIME', 'updated_at': 'DATETIME', 'expires_at': 'DATETIME', 'experience_min': 'FLOAT',
+                    'experience_max': 'FLOAT', 'category': 'VARCHAR(80)', 'notification_attempts': 'INTEGER NOT NULL DEFAULT 0',
+                    'last_notification_attempt': 'DATETIME', 'notification_next_attempt_at': 'DATETIME', 'notification_error': 'TEXT',
+                    'content_hash': 'VARCHAR(64)', 'source_hash': 'VARCHAR(64)', 'is_active': 'BOOLEAN NOT NULL DEFAULT 1',
+                    'is_duplicate': 'BOOLEAN NOT NULL DEFAULT 0', 'duplicate_of': 'INTEGER',
+                },
+                'source_runs': {'jobs_updated': 'INTEGER NOT NULL DEFAULT 0', 'duplicates': 'INTEGER NOT NULL DEFAULT 0', 'duration_seconds': 'FLOAT', 'status': "VARCHAR(24) NOT NULL DEFAULT 'RUNNING'"},
+                'source_health': {'health_score': 'FLOAT NOT NULL DEFAULT 1', 'last_duration_seconds': 'FLOAT', 'last_new_jobs': 'INTEGER NOT NULL DEFAULT 0', 'last_duplicates': 'INTEGER NOT NULL DEFAULT 0'},
+            }
+            for table, columns in sqlite_columns.items():
+                existing = {column['name'] for column in inspect(self.engine).get_columns(table)}
+                for name, ddl in columns.items():
+                    if name not in existing:
+                        with self.engine.begin() as connection:
+                            connection.exec_driver_sql(f'ALTER TABLE {table} ADD COLUMN {name} {ddl}')
+            with self.engine.begin() as connection:
+                connection.exec_driver_sql('UPDATE jobs SET posted_at = date_posted WHERE posted_at IS NULL')
+                connection.exec_driver_sql('UPDATE jobs SET first_seen_at = date_discovered WHERE first_seen_at IS NULL')
+                connection.exec_driver_sql("UPDATE jobs SET is_active = 0 WHERE status = 'EXPIRED'")
+        self._create_runtime_indexes()
+
+    def _create_runtime_indexes(self):
+        """Add only the indexes used by discovery, dedupe, and notifications."""
+        statements = (
+            'CREATE INDEX IF NOT EXISTS ix_jobs_posted_active_score ON jobs (posted_at, is_active, score)',
+            'CREATE INDEX IF NOT EXISTS ix_jobs_notification_due ON jobs (notification_state, notification_next_attempt_at)',
+            'CREATE INDEX IF NOT EXISTS ix_jobs_source_job_id ON jobs (source, source_job_id)',
+            'CREATE INDEX IF NOT EXISTS ix_source_health_status ON source_health (status, last_checked_at)',
+            'CREATE INDEX IF NOT EXISTS ix_source_runs_completed ON source_runs (completed_at, success)',
+        )
+        with self.engine.begin() as connection:
+            for statement in statements:
+                connection.exec_driver_sql(statement)
     def initialize_runtime_config(self, cfg: Settings) -> dict[str, str]:
         """Create/load safe runtime settings and hydrate the process config."""
         self.create_schema()
@@ -154,6 +237,91 @@ class Repository:
                 session.add(AppSetting(key=key, value=str(value)))
             else:
                 setting.value = str(value)
+
+    def upsert_source_target(self, target: dict, discovery_method: str = 'configured') -> JobSource:
+        """Persist a validated public ATS target and its company provenance."""
+        provider = str(target.get('kind') or target.get('provider') or '').lower()
+        identifier = str(target.get('token') or target.get('site') or target.get('board') or target.get('company') or '').strip()
+        name = str(target.get('name') or identifier).strip()
+        if not provider or not identifier or not name:
+            raise ValueError('source target requires provider, identifier, and name')
+        base_url = str(target.get('base_url') or target.get('career_url') or '').strip()
+        with self.sessions.begin() as session:
+            company = session.scalar(select(JobCompany).where(JobCompany.name == name))
+            if company is None:
+                company = JobCompany(name=name, domain=target.get('domain'), country=target.get('country') or 'Philippines', career_url=target.get('career_url'), ats_provider=provider, ats_identifier=identifier, discovery_method=discovery_method)
+                session.add(company)
+                session.flush()
+            else:
+                company.domain = target.get('domain') or company.domain
+                company.career_url = target.get('career_url') or company.career_url
+                company.ats_provider = provider
+                company.ats_identifier = identifier
+                company.last_discovered = datetime.now(timezone.utc)
+                company.discovery_method = discovery_method or company.discovery_method
+                company.active = True
+            source = session.scalar(select(JobSource).where(JobSource.provider == provider, JobSource.board_identifier == identifier))
+            if source is None:
+                source = JobSource(company_id=company.id, provider=provider, board_identifier=identifier, base_url=base_url or f'{provider}://{identifier}', discovery_method=discovery_method)
+                session.add(source)
+            else:
+                source.company_id = company.id
+                source.base_url = base_url or source.base_url
+                source.enabled = True
+                source.discovery_method = discovery_method or source.discovery_method
+                source.health_score = max(source.health_score or 0, 0.25)
+            return source
+
+    def registry_targets(self) -> list[dict]:
+        with self.sessions() as session:
+            rows = session.scalars(select(JobSource).where(JobSource.enabled.is_(True)).order_by(JobSource.id)).all()
+            companies = {company.id: company for company in session.scalars(select(JobCompany)).all()}
+        targets = []
+        for row in rows:
+            company = companies.get(row.company_id)
+            target = {'kind': row.provider, 'name': company.name if company else row.board_identifier, 'token': row.board_identifier}
+            if row.provider == 'lever': target['site'] = row.board_identifier
+            if row.provider == 'ashby': target['board'] = row.board_identifier
+            if row.provider == 'smartrecruiters': target['company'] = row.board_identifier
+            if company and company.domain: target['domain'] = company.domain
+            if company and company.career_url: target['career_url'] = company.career_url
+            targets.append(target)
+        return targets
+
+    def source_registry_snapshot(self) -> list[dict]:
+        with self.sessions() as session:
+            rows = session.scalars(select(JobSource).order_by(JobSource.provider, JobSource.board_identifier)).all()
+            companies = {company.id: company for company in session.scalars(select(JobCompany)).all()}
+        return [{
+            'id': row.id, 'provider': row.provider, 'board_identifier': row.board_identifier,
+            'company': companies.get(row.company_id).name if companies.get(row.company_id) else None,
+            'enabled': row.enabled, 'health_score': row.health_score, 'last_success': row.last_success,
+            'last_attempt': row.last_attempt, 'last_error': row.last_error, 'discovery_method': row.discovery_method,
+        } for row in rows]
+
+    def record_source_registry_result(self, source_name: str, success: bool, error: str | None = None) -> None:
+        """Mirror runtime health onto discovered-source registry rows."""
+        if ':' not in source_name:
+            return
+        provider, company_name = source_name.split(':', 1)
+        if provider not in {'greenhouse', 'lever', 'ashby', 'smartrecruiters'}:
+            return
+        now=datetime.now(timezone.utc)
+        with self.sessions.begin() as session:
+            rows=session.scalars(
+                select(JobSource)
+                .join(JobCompany, JobCompany.id == JobSource.company_id)
+                .where(JobSource.provider == provider, JobCompany.name == company_name)
+            ).all()
+            for row in rows:
+                row.last_attempt=now
+                if success:
+                    row.last_success=now
+                    row.last_error=None
+                    row.health_score=min(1.0,(row.health_score or 0.0)+0.1)
+                else:
+                    row.last_error=(error or 'source fetch failed')[:1000]
+                    row.health_score=max(0.0,(row.health_score if row.health_score is not None else 1.0)-0.15)
 
     @staticmethod
     def _provenance(item: NormalizedJob) -> dict:
@@ -227,7 +395,24 @@ class Repository:
         existing.raw_metadata=metadata
 
     def save(self, item: NormalizedJob, score:int, reasons:list[str], warnings:list[str]) -> Job | None:
+        return self.save_with_result(item,score,reasons,warnings)[0]
+
+    def save_with_result(self, item: NormalizedJob, score:int, reasons:list[str], warnings:list[str]) -> tuple[Job | None,str]:
         with self.sessions() as s:
+            seen_at=datetime.now(timezone.utc)
+            source_hash=hashlib.sha256(f'{item.source}|{item.source_job_id or item.url}'.encode('utf-8')).hexdigest()
+            content_hash=item.content_hash
+            updated_at=(item.raw_metadata or {}).get('updated_at') or item.date_posted
+            if isinstance(updated_at,str):
+                try: updated_at=datetime.fromisoformat(updated_at.replace('Z','+00:00'))
+                except ValueError: updated_at=item.date_posted
+            fields={
+                'company_domain':item.company_domain, 'country':item.country, 'requirements':item.requirements or item.description,
+                'salary_min':item.salary_min, 'salary_max':item.salary_max, 'salary_currency':item.salary_currency,
+                'updated_at':updated_at,
+                'expires_at':item.expires_at, 'experience_min':item.experience_min, 'experience_max':item.experience_max,
+                'category':item.category, 'content_hash':content_hash, 'source_hash':source_hash, 'is_active':item.is_active,
+            }
             identity_key=self._identity_key(item)
             candidates=s.scalars(select(Job).where(Job.identity_key==identity_key)).all()
             # Rows created before the migration used ``fingerprint`` alone.
@@ -242,21 +427,41 @@ class Repository:
                 stored_date=existing.date_posted.replace(tzinfo=timezone.utc) if existing.date_posted and existing.date_posted.tzinfo is None else existing.date_posted
                 repost=(existing.source==item.source and item.source_job_id and item.source_job_id!=existing.source_job_id and item.date_posted and (not stored_date or item.date_posted>stored_date))
                 if not repost:
-                    existing.last_seen_at=datetime.now(timezone.utc)
+                    material_change=bool(existing.content_hash and existing.content_hash!=content_hash) or (not existing.content_hash and clean(existing.description)!=clean(item.description))
+                    reactivated=existing.status==JobStatus.EXPIRED.value and item.is_active
+                    existing.last_seen_at=seen_at
+                    existing.title=item.title; existing.company=item.company; existing.location=item.location
+                    existing.work_setup=item.work_setup or item.remote_type; existing.description=item.description
+                    existing.url=item.url; existing.application_url=item.application_url
+                    existing.application_email=item.application_email; existing.salary=item.salary
+                    existing.employment_type=item.employment_type; existing.seniority=item.seniority
+                    existing.skills=extract_skills(item); existing.score=score
+                    existing.match_reasons=reasons; existing.warnings=warnings
+                    if not existing.date_posted and item.date_posted:
+                        existing.date_posted=item.date_posted; existing.posted_at=item.date_posted
+                    for key,value in fields.items():
+                        if value is not None or key in {'is_active','requirements','content_hash','source_hash'}:
+                            setattr(existing,key,value)
                     self._merge_duplicate_provenance(existing,item)
+                    if reactivated:
+                        existing.status=JobStatus.NEW.value; existing.notification_state='PENDING'
+                        existing.notification_error=None; existing.notification_next_attempt_at=None
                     s.commit()
-                    return None
-                existing.source_job_id=item.source_job_id; existing.date_posted=item.date_posted; existing.last_seen_at=datetime.now(timezone.utc); existing.url=item.url; existing.application_url=item.application_url; existing.description=item.description; existing.score=score; existing.match_reasons=reasons; existing.warnings=warnings; existing.raw_metadata={**item.raw_metadata,'reposted':True,'source_provenance':[self._provenance(item)]}; existing.status=JobStatus.NEW.value; existing.notification_state='PENDING'
-                s.commit(); return existing
+                    return (existing,'reposted') if reactivated else (None,'updated' if material_change else 'duplicate')
+                existing.source_job_id=item.source_job_id; existing.date_posted=item.date_posted; existing.posted_at=item.date_posted; existing.last_seen_at=seen_at; existing.url=item.url; existing.application_url=item.application_url; existing.description=item.description; existing.score=score; existing.match_reasons=reasons; existing.warnings=warnings; existing.raw_metadata={**item.raw_metadata,'reposted':True,'source_provenance':[self._provenance(item)]}; existing.status=JobStatus.NEW.value; existing.notification_state='PENDING'; existing.notification_error=None; existing.notification_next_attempt_at=None
+                for key,value in fields.items():
+                    if value is not None or key in {'is_active','requirements','content_hash','source_hash'}:
+                        setattr(existing,key,value)
+                s.commit(); return existing,'reposted'
             # A same-company/title/location collision without matching source
             # evidence is a genuinely distinct vacancy. Keep its broad bucket
             # in ``identity_key`` but use the stable source-aware token for
             # the unique storage fingerprint.
             stored_fingerprint=item.fingerprint if not candidates else item.dedup_token
-            job=Job(fingerprint=stored_fingerprint,identity_key=identity_key,source=item.source,source_job_id=item.source_job_id,title=item.title,company=item.company,location=item.location,work_setup=item.work_setup,description=item.description,url=item.url,application_url=item.application_url,application_email=item.application_email,salary=item.salary,date_posted=item.date_posted,last_seen_at=datetime.now(timezone.utc),employment_type=item.employment_type,seniority=item.seniority,skills=extract_skills(item),raw_metadata={**(item.raw_metadata or {}),'source_provenance':[self._provenance(item)]},score=score,match_reasons=reasons,warnings=warnings)
+            job=Job(fingerprint=stored_fingerprint,identity_key=identity_key,source=item.source,source_job_id=item.source_job_id,title=item.title,company=item.company,company_domain=item.company_domain,location=item.location,country=item.country,work_setup=item.work_setup or item.remote_type,description=item.description,requirements=item.requirements or item.description,url=item.url,application_url=item.application_url,application_email=item.application_email,salary=item.salary,salary_min=item.salary_min,salary_max=item.salary_max,salary_currency=item.salary_currency,date_posted=item.date_posted,posted_at=item.date_posted,date_discovered=seen_at,first_seen_at=seen_at,last_seen_at=seen_at,updated_at=fields['updated_at'],expires_at=item.expires_at,employment_type=item.employment_type,seniority=item.seniority,experience_min=item.experience_min,experience_max=item.experience_max,category=item.category,skills=extract_skills(item),raw_metadata={**(item.raw_metadata or {}),'source_provenance':[self._provenance(item)]},score=score,match_reasons=reasons,warnings=warnings,content_hash=content_hash,source_hash=source_hash,is_active=item.is_active)
             s.add(job)
-            try: s.commit(); return job
-            except IntegrityError: s.rollback(); return None
+            try: s.commit(); return job,'new'
+            except IntegrityError: s.rollback(); return None,'duplicate'
     def run_start(self, source):
         with self.sessions() as s: x=SourceRun(source=source); s.add(x); s.commit(); return x.id
     def run_finish(self,id,**values):
@@ -269,20 +474,20 @@ class Repository:
             item=s.get(SourceHealth,source)
             if not item: item=SourceHealth(source=source); s.add(item); s.commit()
             return item
-    def health_success(self, source, jobs, baseline=False, status='healthy', error=None, raw_jobs=None, normalized_jobs=None, accepted_jobs=None):
+    def health_success(self, source, jobs, baseline=False, status='healthy', error=None, raw_jobs=None, normalized_jobs=None, accepted_jobs=None, duration_seconds=None, new_jobs=0, duplicates=0):
         with self.sessions() as s:
             item=s.get(SourceHealth,source) or SourceHealth(source=source); s.add(item)
             item.last_checked_at=item.last_success_at=datetime.now(timezone.utc); item.last_job_count=jobs
             item.last_raw_jobs=jobs if raw_jobs is None else raw_jobs
             item.last_normalized_jobs=jobs if normalized_jobs is None else normalized_jobs
             item.last_accepted_jobs=jobs if accepted_jobs is None else accepted_jobs
-            item.consecutive_failures=0; item.last_error=error; item.status=status; item.baseline_initialized=baseline or item.baseline_initialized; s.commit()
+            item.consecutive_failures=0; item.last_error=error; item.status=status; item.health_score=min(1.0,(item.health_score or 0.0)+0.1); item.last_duration_seconds=duration_seconds; item.last_new_jobs=new_jobs; item.last_duplicates=duplicates; item.baseline_initialized=baseline or item.baseline_initialized; s.commit()
     def health_failure(self, source, error):
         with self.sessions() as s:
             item=s.get(SourceHealth,source) or SourceHealth(source=source); s.add(item)
             item.last_checked_at=datetime.now(timezone.utc)
             item.consecutive_failures=(item.consecutive_failures or 0)+1
-            item.last_error=error; item.status='unhealthy'; s.commit()
+            item.last_error=error; item.status='unhealthy'; item.health_score=max(0.0,(item.health_score if item.health_score is not None else 1.0)-0.15); s.commit()
     def reserve_baseline_alert(self, limit=5):
         with self.sessions() as s:
             state=s.get(AppState,'baseline_alert_count')
@@ -316,7 +521,9 @@ class Repository:
         cutoff=datetime.now(timezone.utc)-timedelta(days=90)
         with self.sessions() as s:
             rows=s.query(Job).filter(Job.date_posted.is_not(None),Job.date_posted<cutoff,Job.status.notin_([JobStatus.APPLIED.value,JobStatus.OFFER.value,JobStatus.REJECTED.value])).all()
-            for job in rows: job.status=JobStatus.EXPIRED.value
+            for job in rows:
+                job.status=JobStatus.EXPIRED.value
+                job.is_active=False
             s.commit(); return len(rows)
     def by_fingerprint(self, fingerprint: str) -> Job | None:
         with self.sessions() as s:
@@ -384,6 +591,47 @@ class Repository:
             except json.JSONDecodeError: current={}
             if current.get('owner') == instance_id:
                 row.value=json.dumps({'owner':'','expires_at':datetime.now(timezone.utc).isoformat()})
+
+    def acquire_worker_lease(self, instance_id: str, ttl_seconds: int = 120) -> bool:
+        """Prevent duplicate polling when the host runs multiple web workers."""
+        key='discovery_worker_lease'; now=datetime.now(timezone.utc); expires=now+timedelta(seconds=max(30,ttl_seconds))
+        with self.sessions.begin() as s:
+            row=s.execute(select(AppState).where(AppState.key==key).with_for_update()).scalar_one_or_none()
+            current={}
+            if row:
+                try: current=json.loads(row.value)
+                except json.JSONDecodeError: current={}
+            try:
+                valid_until=datetime.fromisoformat(str(current.get('expires_at')))
+                if valid_until.tzinfo is None: valid_until=valid_until.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError): valid_until=now-timedelta(seconds=1)
+            if current.get('owner') not in {None,'',instance_id} and valid_until > now:
+                return False
+            payload=json.dumps({'owner':instance_id,'expires_at':expires.isoformat()})
+            if row: row.value=payload
+            else: s.add(AppState(key=key,value=payload))
+            return True
+
+    def renew_worker_lease(self, instance_id: str, ttl_seconds: int = 120) -> bool:
+        key='discovery_worker_lease'; now=datetime.now(timezone.utc)
+        with self.sessions.begin() as s:
+            row=s.execute(select(AppState).where(AppState.key==key).with_for_update()).scalar_one_or_none()
+            if not row: return False
+            try: current=json.loads(row.value)
+            except json.JSONDecodeError: return False
+            if current.get('owner') != instance_id: return False
+            row.value=json.dumps({'owner':instance_id,'expires_at':(now+timedelta(seconds=max(30,ttl_seconds))).isoformat()})
+            return True
+
+    def release_worker_lease(self, instance_id: str) -> None:
+        key='discovery_worker_lease'
+        with self.sessions.begin() as s:
+            row=s.execute(select(AppState).where(AppState.key==key).with_for_update()).scalar_one_or_none()
+            if not row: return
+            try: current=json.loads(row.value)
+            except json.JSONDecodeError: current={}
+            if current.get('owner') == instance_id:
+                row.value=json.dumps({'owner':'','expires_at':datetime.now(timezone.utc).isoformat()})
     def claim_bot_alert(self, job_id: int) -> bool:
         """Atomically reserve a bot alert without ever re-claiming a sent one.
 
@@ -393,10 +641,60 @@ class Repository:
         """
         with self.sessions.begin() as s:
             job=s.get(Job,job_id)
-            if not job or job.notification_state not in {'BOT_PENDING','FAILED'}:
+            if not job or job.notification_state not in {'BOT_PENDING','FAILED'} or job.status in {JobStatus.SAVED.value,JobStatus.IGNORED.value,JobStatus.APPLIED.value,JobStatus.REJECTED.value}:
                 return False
             job.notification_state='BOT_SENDING'
+            job.notification_attempts=(job.notification_attempts or 0)+1
+            job.last_notification_attempt=datetime.now(timezone.utc)
         return True
+
+    def claim_webhook_alert(self, job_id: int) -> bool:
+        """Atomically claim one webhook delivery across workers/digests."""
+        with self.sessions.begin() as s:
+            job=s.execute(select(Job).where(Job.id==job_id).with_for_update()).scalar_one_or_none()
+            if not job or job.notification_state not in {'PENDING','FAILED'}:
+                return False
+            job.notification_state='WEBHOOK_SENDING'
+            job.notification_attempts=(job.notification_attempts or 0)+1
+            job.last_notification_attempt=datetime.now(timezone.utc)
+            return True
+
+    def recover_stuck_notifications(self, stale_seconds: int = 900) -> int:
+        """Return bot claims stranded by a process restart to the retry queue."""
+        cutoff=datetime.now(timezone.utc)-timedelta(seconds=max(60, stale_seconds))
+        with self.sessions.begin() as s:
+            rows=s.scalars(select(Job).where(Job.notification_state.in_({'BOT_SENDING','WEBHOOK_SENDING'}), (Job.last_notification_attempt.is_(None) | (Job.last_notification_attempt < cutoff)))).all()
+            for job in rows:
+                job.notification_state='FAILED'
+                job.notification_next_attempt_at=datetime.now(timezone.utc)
+                job.notification_error='delivery claim recovered after worker restart'
+            return len(rows)
+
+    def due_notification_ids(self, minimum_score: int, limit: int = 500, max_attempts: int | None = None) -> list[int]:
+        now=datetime.now(timezone.utc)
+        with self.sessions() as s:
+            query=select(Job.id).where(
+                Job.score >= minimum_score,
+                Job.status.not_in((JobStatus.EXPIRED.value,JobStatus.IGNORED.value,JobStatus.APPLIED.value,JobStatus.REJECTED.value)),
+                Job.notification_state.in_(('PENDING','FAILED','BOT_PENDING')),
+                (Job.notification_next_attempt_at.is_(None) | (Job.notification_next_attempt_at <= now)),
+            )
+            if max_attempts is not None:
+                query=query.where(Job.notification_attempts < max(1,max_attempts))
+            return s.scalars(query.order_by(Job.score.desc(),Job.posted_at.desc().nullslast()).limit(max(1,limit))).all()
+
+    def record_notification_attempt(self, job_id: int, state: str, error: str | None = None, next_attempt_at: datetime | None = None, increment: bool = True) -> bool:
+        with self.sessions.begin() as s:
+            job=s.get(Job,job_id)
+            if not job:
+                return False
+            if increment:
+                job.notification_attempts=(job.notification_attempts or 0)+1
+            job.last_notification_attempt=datetime.now(timezone.utc)
+            job.notification_state=state
+            job.notification_error=error
+            job.notification_next_attempt_at=next_attempt_at
+            return True
 
     def record_alert_delivery(self, job_id: int, notification_state: str) -> bool:
         """Persist delivery state without replacing a user/application decision.
@@ -411,6 +709,9 @@ class Repository:
             if not job:
                 return False
             job.notification_state=notification_state
+            job.last_notification_attempt=datetime.now(timezone.utc)
+            job.notification_error=None if notification_state == 'SENT' else job.notification_error
+            job.notification_next_attempt_at=None if notification_state in {'SENT','SKIPPED'} else job.notification_next_attempt_at
             if notification_state == 'SENT' and job.status in NOTIFICATION_MUTABLE_STATUSES:
                 job.status=JobStatus.NOTIFIED.value
         return True
@@ -476,13 +777,22 @@ class Discord:
     def payload(self, job: Job, test=False):
         label='𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇' if job.score>=85 else '𝐄𝐍𝐓𝐑𝐘-𝐋𝐄𝐕𝐄𝐋 𝐓𝐄𝐂𝐇'
         details=[job.location or 'Location not stated']
+        label='EXCELLENT MATCH' if job.score>=90 else 'STRONG MATCH' if job.score>=80 else 'GOOD MATCH' if job.score>=70 else 'STRETCH - CONSIDER APPLYING' if job.score>=60 else 'LOW PRIORITY'
         if job.work_setup and job.work_setup.lower() not in (job.location or '').lower(): details.append(job.work_setup)
         if job.salary: details.append(job.salary)
         if job.date_posted: details.append(self._posted_label(job.date_posted))
         match='\n'.join(job.match_reasons[:6]) or 'Entry-level technology role'
         fields=[{'name':'𝐖𝐇𝐘 𝐈𝐓 𝐅𝐈𝐓𝐒','value':match,'inline':False}]
         if job.warnings: fields.append({'name':'𝐍𝐎𝐓𝐄𝐒','value':'\n'.join(job.warnings[:2]),'inline':False})
+        if job.experience_min is not None or job.experience_max is not None:
+            lower='0' if job.experience_min is None else f'{job.experience_min:g}'
+            upper='+' if job.experience_max is None else f'-{job.experience_max:g}'
+            fields.append({'name':'EXPERIENCE','value':f'{lower}{upper} years','inline':True})
+        if job.skills:
+            fields.append({'name':'IMPORTANT TECHNOLOGIES','value':', '.join(job.skills[:10]),'inline':False})
         row1=[{'type':2,'style':5,'label':'VIEW JOB','url':job.url}]
+        if job.application_url and job.application_url!=job.url and job.application_url.startswith(('https://','http://')):
+            row1.append({'type':2,'style':5,'label':'DIRECT APPLY','url':job.application_url})
         review=self._link(job,'review')
         if review and job.status not in ('APPLIED','IGNORED'):
             row1 += [{'type':2,'style':5,'label':'APPLY NOW','url':review}]
@@ -502,6 +812,12 @@ class Discord:
         content='\n\n'.join(part for part in (role_mention,random.choice(self.motivations)) if part)
         allowed={'parse':[], 'roles':[str(role_id)]} if role_id and not test else {'parse':[]}
         return {'content':content,'allowed_mentions':allowed,'embeds':[{'title':label,'description':f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n\n'+' · '.join(details),'url':job.url,'fields':fields,'footer':{'text':footer}}],'components':[] if test else rows}
+    def digest_payload(self, jobs: list[Job]) -> dict:
+        """Build a no-ping multi-embed payload; Discord allows at most ten embeds."""
+        embeds=[]
+        for job in jobs[:10]:
+            embeds.extend(self.payload(job,test=True).get('embeds',[]))
+        return {'content':f'JOB DIGEST · {len(embeds)} matching openings','allowed_mentions':{'parse':[]},'embeds':embeds}
     async def send(self,job):
         if not self.url: return 'SKIPPED'
         return await self.send_payload(self.payload(job))
@@ -547,9 +863,23 @@ class Discord:
                 if response.status_code not in (204,404): response.raise_for_status()
         repo.set_state('discord_control_panel_message_id',None); repo.set_state('discord_status_message_id',None); repo.set_state('discord_welcome_message_id',None)
 class Pipeline:
-    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._cycle_notifications=0
-    def begin_cycle(self): self._cycle_notifications=0
+    def __init__(self, repo:Repository, config:Settings): self.repo=repo; self.config=config; self.discord=Discord(config.discord_webhook_url,config.discord_motivations,config); self._baseline_lock=asyncio.Lock(); self._cycle_lock=asyncio.Lock(); self._source_discovery_lock=asyncio.Lock(); self._discovered_source_cache=set(); self._cycle_notifications=0; self._cycle_delivered=0
+    def begin_cycle(self): self._cycle_notifications=0; self._cycle_delivered=0
     async def process(self, item:NormalizedJob, notify=True) -> tuple[Job|None,bool]:
+        enrich_canonical(item)
+        # Broad public providers often expose an official ATS application URL.
+        # Promote that URL once into the durable source registry so future
+        # cycles can poll the first-party board directly.
+        from .discovery import target_from_job_url
+        for candidate in (item.application_url,item.url,(item.raw_metadata or {}).get('canonical_url')):
+            target=target_from_job_url(candidate,item.company)
+            if not target: continue
+            key=(target.get('kind'),target.get('token') or target.get('site') or target.get('board') or target.get('company'))
+            async with self._source_discovery_lock:
+                if key not in self._discovered_source_cache:
+                    await asyncio.to_thread(self.repo.upsert_source_target,target,'job_outbound_link')
+                    self._discovered_source_cache.add(key)
+            break
         if not is_ph_location(item) or not is_active_listing(item): return None, False
         score,reasons,warnings,relevant=evaluate(item)
         _,_,fresh=freshness(item)
@@ -557,13 +887,38 @@ class Pipeline:
         # is active and the role is technically relevant.  Freshness affects
         # ranking and alerts, but age alone must not discard a 31–90 day job.
         if not relevant or not fresh: return None, False
-        job=await asyncio.to_thread(self.repo.save,item,score,reasons,warnings)
+        job,outcome=await asyncio.to_thread(self.repo.save_with_result,item,score,reasons,warnings)
+        item.raw_metadata=dict(item.raw_metadata or {})
+        item.raw_metadata['_pipeline_save_outcome']=outcome
         if not job: return None, True
-        if notify and score>=self.config.min_notify_score: await self.notify(job)
+        if notify and score>=self.config.instant_alert_score: await self.notify(job)
         return job, True
-    async def notify(self, job: Job):
+    async def _deliver_webhook(self, job: Job) -> str:
+        if not await asyncio.to_thread(self.repo.claim_webhook_alert,job.id):
+            return 'SKIPPED'
+        try:
+            result=await self.discord.send(job)
+            state='SENT' if result == 'SENT' else 'SKIPPED'
+            await asyncio.to_thread(self.repo.record_alert_delivery,job.id,state)
+            if state == 'SENT': self._cycle_delivered+=1
+            return state
+        except Exception as error:
+            attempts=(job.notification_attempts or 0)+1
+            retry_after=None
+            response=getattr(error,'response',None)
+            if response is not None:
+                value=response.headers.get('Retry-After')
+                try: retry_after=float(value) if value else None
+                except ValueError: retry_after=None
+            delay=max(retry_after or 0,min(3600,self.config.notification_retry_base_seconds*(2**max(0,attempts-1))))
+            exhausted=attempts>=self.config.notification_retry_max_attempts
+            next_attempt=None if exhausted else datetime.now(timezone.utc)+timedelta(seconds=delay)
+            await asyncio.to_thread(self.repo.record_notification_attempt,job.id,'FAILED',str(error)[:500],next_attempt,False)
+            log.warning('discord_notification_failed',extra={'job_id':job.id,'attempt':attempts,'retry_exhausted':exhausted,'error':type(error).__name__})
+            return 'FAILED'
+    async def notify(self, job: Job, force: bool = False):
         async with self._cycle_lock:
-            if self._cycle_notifications>=self.config.max_notifications_per_cycle: return
+            if not force and self._cycle_notifications>=self.config.max_notifications_per_cycle: return
             self._cycle_notifications+=1
         bot_state=await asyncio.to_thread(self.repo.state,'discord_bot_health',{}) or {}
         # Before the first successful bot connection, hold alerts for the bot
@@ -574,32 +929,76 @@ class Pipeline:
             def hold_for_bot():
                 with self.repo.sessions() as s:
                     stored=s.get(Job,job.id)
-                    if stored: stored.notification_state='BOT_PENDING'; s.commit()
+                    if stored:
+                        stored.notification_state='BOT_PENDING'; stored.notification_error=None; stored.notification_next_attempt_at=None; s.commit()
             await asyncio.to_thread(hold_for_bot)
             return
-        try:
-            job.notification_state=await self.discord.send(job)
-        except httpx.HTTPError as e:
-            job.notification_state='FAILED'; log.warning('discord_notification_failed',extra={'job_id':job.id,'error':str(e)})
-        def persist_notification():
-            self.repo.record_alert_delivery(job.id,job.notification_state)
-        await asyncio.to_thread(persist_notification)
+        if not self.config.discord_webhook_url:
+            job.notification_state='SKIPPED'
+            await asyncio.to_thread(self.repo.record_alert_delivery,job.id,'SKIPPED')
+            return
+        job.notification_state=await self._deliver_webhook(job)
     async def retry_notifications(self):
+        await asyncio.to_thread(self.repo.recover_stuck_notifications)
         if not self.config.discord_webhook_url: return 0
-        def failed_ids():
-            with self.repo.sessions() as s:
-                return s.scalars(select(Job.id).where(Job.notification_state=='FAILED',Job.score>=self.config.min_notify_score)).all()
-        ids=await asyncio.to_thread(failed_ids)
+        ids=await asyncio.to_thread(self.repo.due_notification_ids,self.config.instant_alert_score,500,self.config.notification_retry_max_attempts)
         for job_id in ids:
             def load_job():
                 with self.repo.sessions() as s: return s.get(Job,job_id)
             job=await asyncio.to_thread(load_job)
-            if job: await self.notify(job)
+            if job and job.notification_state=='FAILED': await self._deliver_webhook(job)
         return len(ids)
+
+    async def send_digest(self) -> int:
+        """Deliver all due good/stretch matches in bounded Discord batches."""
+        if not self.config.digest_enabled or not self.config.discord_webhook_url:
+            return 0
+        last=self.repo.state('last_digest_at')
+        if last:
+            try:
+                if (datetime.now(timezone.utc)-datetime.fromisoformat(str(last))).total_seconds() < self.config.digest_interval_seconds:
+                    return 0
+            except ValueError:
+                pass
+        ids=await asyncio.to_thread(self.repo.due_notification_ids,self.config.min_notify_score,5000,self.config.notification_retry_max_attempts)
+        if not ids:
+            return 0
+        jobs=[]
+        for job_id in ids:
+            def load(job_id=job_id):
+                with self.repo.sessions() as s: return s.get(Job,job_id)
+            job=await asyncio.to_thread(load)
+            if job and job.notification_state in {'PENDING','FAILED'}:
+                jobs.append(job)
+        delivered=0
+        for start in range(0,len(jobs),max(1,min(10,self.config.notification_batch_size))):
+            candidates=jobs[start:start+max(1,min(10,self.config.notification_batch_size))]
+            batch=[]
+            for job in candidates:
+                if await asyncio.to_thread(self.repo.claim_webhook_alert,job.id):
+                    batch.append(job)
+            if not batch:
+                continue
+            payload=self.discord.digest_payload(batch)
+            try:
+                await self.discord.send_payload(payload)
+            except Exception as error:
+                for job in batch:
+                    attempts=(job.notification_attempts or 0)+1
+                    delay=min(3600,self.config.notification_retry_base_seconds*(2**max(0,attempts-1)))
+                    next_attempt=None if attempts>=self.config.notification_retry_max_attempts else datetime.now(timezone.utc)+timedelta(seconds=delay)
+                    await asyncio.to_thread(self.repo.record_notification_attempt,job.id,'FAILED',str(error)[:500],next_attempt,False)
+                continue
+            for job in batch:
+                await asyncio.to_thread(self.repo.record_alert_delivery,job.id,'SENT')
+                delivered+=1
+        if delivered:
+            self.repo.set_state('last_digest_at',datetime.now(timezone.utc).isoformat())
+        return delivered
     async def run_source(self,source):
-        run=await asyncio.to_thread(self.repo.run_start,source.name); discovered=new=filtered=0
+        run=await asyncio.to_thread(self.repo.run_start,source.name); started=time.monotonic(); discovered=new=filtered=0
         pages_fetched=0
-        raw_jobs_discovered=normalized_jobs=jobs_0_90=ph_remote_ph=computer_related=entry_level_compatible=qualifying=duplicates_removed=0
+        raw_jobs_discovered=normalized_jobs=jobs_0_90=ph_remote_ph=computer_related=entry_level_compatible=qualifying=duplicates_removed=malformed_jobs=jobs_updated=0
         succeeded=False
         try:
             max_attempts=max(1,int(getattr(source,'max_fetch_attempts',3) or 3))
@@ -611,72 +1010,101 @@ class Pipeline:
             pages_fetched=int(getattr(source,'pages_fetched',1) or 1)
             raw_jobs_discovered=int(getattr(source,'raw_jobs_discovered',len(items)) or 0)
             normalized_jobs=int(getattr(source,'normalized_jobs',len(items)) or 0)
+            malformed_jobs+=int(getattr(source,'normalization_errors',0) or 0)
             now=datetime.now(timezone.utc)
             for item in items:
-                if not is_active_listing(item):
-                    continue
-                _,_,in_window=freshness(item,now)
-                if not in_window:
-                    continue
-                jobs_0_90 += 1
-                if not is_ph_location(item):
-                    continue
-                ph_remote_ph += 1
-                score,_,warnings,_profile_eligible=evaluate(item,now)
-                # "Tech related" precedes the seniority stage in the
-                # observable funnel. A Senior DevOps role is still technical;
-                # it is counted here and removed only from entry-level
-                # compatibility/qualification below.
-                technical=not any(warning.startswith('Role is outside') for warning in warnings)
-                if not technical:
-                    continue
-                computer_related += 1
-                if not any(
-                    warning.startswith('Senior-level') or warning.startswith('Requires')
-                    for warning in warnings
-                ) and score >= 0:
-                    entry_level_compatible += 1
+                try:
+                    enrich_canonical(item)
+                    if not is_active_listing(item):
+                        continue
+                    _,_,in_window=freshness(item,now)
+                    if not in_window:
+                        continue
+                    jobs_0_90 += 1
+                    if not is_ph_location(item):
+                        continue
+                    ph_remote_ph += 1
+                    score,_,warnings,_profile_eligible=evaluate(item,now)
+                    # "Tech related" precedes the seniority stage in the
+                    # observable funnel. A Senior DevOps role is still technical;
+                    # it is counted here and removed only from entry-level
+                    # compatibility/qualification below.
+                    technical=not any(warning.startswith('Role is outside') for warning in warnings)
+                    if not technical:
+                        continue
+                    computer_related += 1
+                    if not any(
+                        warning.startswith('Senior-level') or warning.startswith('Requires 5+')
+                        for warning in warnings
+                    ) and score >= 0:
+                        entry_level_compatible += 1
+                except Exception as exc:
+                    malformed_jobs += 1
+                    log.warning('malformed_job_skipped',extra={'source':source.name,'error_type':type(exc).__name__})
             seen_fingerprints=set(); unique_items=[]
             for item in items:
-                if item.dedup_token in seen_fingerprints:
-                    duplicates_removed += 1
-                    continue
-                seen_fingerprints.add(item.dedup_token)
-                unique_items.append(item)
+                try:
+                    if item.dedup_token in seen_fingerprints:
+                        duplicates_removed += 1
+                        continue
+                    seen_fingerprints.add(item.dedup_token)
+                    unique_items.append(item)
+                except Exception as exc:
+                    malformed_jobs += 1
+                    log.warning('malformed_job_dedup_skipped',extra={'source':source.name,'error_type':type(exc).__name__})
             health=await asyncio.to_thread(self.repo.health,source.name)
             baseline=not health.baseline_initialized
-            ordered=sorted(unique_items,key=lambda x:evaluate(x)[0],reverse=True)
+            def ranking(item):
+                try: return evaluate(item)[0]
+                except Exception: return -1
+            ordered=sorted(unique_items,key=ranking,reverse=True)
             baseline_candidates=[]
             for item in ordered:
-                discovered+=1; job,accepted=await self.process(item,notify=not baseline); filtered+=not accepted; new+=job is not None
-                qualifying += int(accepted)
-                if accepted and job is None:
-                    duplicates_removed += 1
-                if baseline and job and job.score>=self.config.min_notify_score: baseline_candidates.append(job)
+                discovered+=1
+                try:
+                    job,accepted=await self.process(item,notify=not baseline)
+                    save_outcome=(item.raw_metadata or {}).pop('_pipeline_save_outcome',None)
+                    filtered+=not accepted; new+=int(save_outcome in {'new','reposted'})
+                    jobs_updated+=int(save_outcome=='updated')
+                    qualifying += int(accepted)
+                    if accepted and save_outcome=='duplicate':
+                        duplicates_removed += 1
+                    if baseline and job and job.score>=self.config.min_notify_score: baseline_candidates.append(job)
+                except Exception as exc:
+                    malformed_jobs += 1; filtered += 1
+                    log.warning('job_processing_failed',extra={'source':source.name,'error_type':type(exc).__name__})
             if baseline:
                 for job in baseline_candidates:
                     async with self._baseline_lock:
                         allowed=await asyncio.to_thread(self.repo.reserve_baseline_alert)
                     if not allowed: break
                     await self.notify(job)
-            await asyncio.to_thread(self.repo.run_finish,run,success=True,discovered=discovered,new_jobs=new,filtered=filtered)
+            duration=time.monotonic()-started
+            await asyncio.to_thread(self.repo.run_finish,run,success=True,status='SUCCESS',duration_seconds=duration,discovered=discovered,new_jobs=new,jobs_updated=jobs_updated,filtered=filtered,duplicates=duplicates_removed)
             status='degraded' if getattr(source,'degraded',False) else 'healthy'
             await asyncio.to_thread(
                 self.repo.health_success, source.name, discovered, baseline=True,
                 status=status, error=getattr(source,'last_error_category',None),
                 raw_jobs=raw_jobs_discovered, normalized_jobs=normalized_jobs,
-                accepted_jobs=qualifying,
+                accepted_jobs=qualifying,duration_seconds=duration,new_jobs=new,duplicates=duplicates_removed,
             )
+            await asyncio.to_thread(self.repo.record_source_registry_result,source.name,True,None)
             if source.name.startswith('jobspy:'):
-                log.info(
-                    'jobspy_source_funnel source=%s raw=%s normalized=%s days_0_90=%s ph_remote_ph=%s tech=%s entry_level=%s duplicates=%s new_unique=%s qualifying=%s status=%s',
-                    source.name,raw_jobs_discovered,normalized_jobs,jobs_0_90,ph_remote_ph,
-                    computer_related,entry_level_compatible,duplicates_removed,new,qualifying,status,
-                )
+                log.info('jobspy_source_funnel',extra={'source':source.name,'raw_jobs':raw_jobs_discovered,'normalized_jobs':normalized_jobs,'jobs_0_90':jobs_0_90,'ph_remote_ph':ph_remote_ph,'computer_related':computer_related,'entry_level_compatible':entry_level_compatible,'duplicates':duplicates_removed,'new_jobs':new,'qualifying':qualifying,'status':status})
+            log.info('source_run_complete',extra={'source':source.name,'status':status,'raw_jobs':raw_jobs_discovered,'normalized_jobs':normalized_jobs,'accepted_jobs':qualifying,'new_jobs':new,'jobs_updated':jobs_updated,'duplicates':duplicates_removed,'malformed_jobs':malformed_jobs,'duration_seconds':round(duration,3)})
             succeeded=True
+        except asyncio.CancelledError:
+            duration=time.monotonic()-started
+            message='source run cancelled by scheduler timeout or shutdown'
+            await asyncio.to_thread(self.repo.run_finish,run,success=False,status='TIMEOUT',duration_seconds=duration,error=message)
+            await asyncio.to_thread(self.repo.health_failure,source.name,message)
+            await asyncio.to_thread(self.repo.record_source_registry_result,source.name,False,message)
+            raise
         except Exception as e:
-            await asyncio.to_thread(self.repo.run_finish,run,success=False,error=str(e)); log.warning('source_failed',extra={'source':source.name,'error':str(e)})
+            duration=time.monotonic()-started
+            await asyncio.to_thread(self.repo.run_finish,run,success=False,status='FAILED',duration_seconds=duration,error=str(e)); log.warning('source_failed',extra={'source':source.name,'error':str(e),'duration_seconds':round(duration,2)})
             await asyncio.to_thread(self.repo.health_failure,source.name,str(e))
+            await asyncio.to_thread(self.repo.record_source_registry_result,source.name,False,str(e))
         return {
             'source':source.name,'discovered':discovered,'new':new,'filtered':filtered,
             'success': succeeded,'pages_fetched':pages_fetched,'raw_jobs_discovered':raw_jobs_discovered,
@@ -684,4 +1112,6 @@ class Pipeline:
             'computer_related':computer_related,'entry_level_compatible':entry_level_compatible,
             'qualifying':qualifying,
             'duplicates_removed':duplicates_removed,
+            'malformed_jobs':malformed_jobs,
+            'jobs_updated':jobs_updated,
         }

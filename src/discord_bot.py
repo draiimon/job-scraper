@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio, io, logging, os, random, socket, time, uuid
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from .security import ActionTokens
 
@@ -350,6 +350,8 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         def __init__(self, job):
             super().__init__(timeout=900); self.job_id=job.id
             self.add_item(discord.ui.Button(label='VIEW JOB',style=discord.ButtonStyle.link,url=job.url))
+            if job.application_url and job.application_url!=job.url and job.application_url.startswith(('https://','http://')):
+                self.add_item(discord.ui.Button(label='DIRECT APPLY',style=discord.ButtonStyle.link,url=job.application_url))
         @discord.ui.button(label='APPLY NOW',style=discord.ButtonStyle.primary)
         async def apply(self,interaction,button):
             await interaction.response.defer(ephemeral=True,thinking=True)
@@ -390,12 +392,19 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.followup.send(embed=styled_embed('𝐒𝐊𝐈𝐏𝐏𝐄𝐃','You will no longer receive alerts for this vacancy.'),ephemeral=True)
     def card(job):
         posted = discord_timestamp(job.date_posted.isoformat()) if job.date_posted else 'Date unavailable'
+        match_label='EXCELLENT MATCH' if job.score>=90 else 'STRONG MATCH' if job.score>=80 else 'GOOD MATCH' if job.score>=70 else 'STRETCH - CONSIDER APPLYING' if job.score>=60 else 'LOW PRIORITY'
         embed=styled_embed(
-            '𝐇𝐈𝐆𝐇 𝐌𝐀𝐓𝐂𝐇' if job.score>=85 else '𝐄𝐍𝐓𝐑𝐘-𝐋𝐄𝐕𝐄𝐋 𝐓𝐄𝐂𝐇',
+            match_label,
             f'**{job.score}% MATCH**\n\n**{job.title}**\n{job.company}\n{job.location}\nPosted: {posted}',
             url=job.url,
         )
         if job.match_reasons: embed.add_field(name='𝐖𝐇𝐘 𝐈𝐓 𝐅𝐈𝐓𝐒',value='\n'.join(job.match_reasons[:5]),inline=False)
+        if job.experience_min is not None or job.experience_max is not None:
+            lower='0' if job.experience_min is None else f'{job.experience_min:g}'
+            upper='+' if job.experience_max is None else f'-{job.experience_max:g}'
+            embed.add_field(name='EXPERIENCE',value=f'{lower}{upper} years',inline=True)
+        if job.skills: embed.add_field(name='IMPORTANT TECHNOLOGIES',value=', '.join(job.skills[:10]),inline=False)
+        embed.add_field(name='SOURCE',value=job.source.replace(':',' / ',1),inline=True)
         return embed,JobView(job)
     async def send_jobs(interaction,jobs):
         if not jobs: await interaction.followup.send('No recent qualifying jobs found.',ephemeral=True); return
@@ -463,8 +472,11 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             await interaction.response.defer(ephemeral=True,thinking=True)
             await send_application_review(interaction,self.job_id)
     class ViewAllJobsView(OwnerView):
-        def __init__(self,jobs,page=0,total_pages=1):
-            super().__init__(timeout=900); self.page=page; self.total_pages=total_pages
+        def __init__(self,jobs,page=0,total_pages=1,days=90,min_score=0):
+            super().__init__(timeout=3600)
+            self.page=page; self.total_pages=total_pages
+            self.days=days; self.min_score=min_score
+            self._page_lock=asyncio.Lock()
             for index,job in enumerate(jobs,start=page*5+1):
                 url=job.application_url or job.url
                 if url and url.startswith(('https://','http://')):
@@ -475,21 +487,46 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             self.previous.disabled=self.page<=0
             self.next.disabled=self.page>=self.total_pages-1
             self.indicator.label=f'PAGE {self.page+1} / {self.total_pages}'
-        async def render(self,message):
-            jobs,total=await load_view_all_jobs(self.page)
+        async def render(self,interaction):
+            """Reload one page and edit the component's original message.
+
+            Component interactions, especially ephemeral ones, are most reliable
+            when edited through the interaction token.  Editing the cached
+            ``interaction.message`` directly was intermittently rejected by
+            Discord, leaving NEXT acknowledged but visually unchanged.
+            """
+            jobs,total=await load_view_all_jobs(self.page,days=self.days,min_score=self.min_score)
             pages=max(1,(total+4)//5)
+            self.total_pages=pages
+            self.page=min(max(0,self.page),pages-1)
+            if total and not jobs:
+                jobs,total=await load_view_all_jobs(self.page,days=self.days,min_score=self.min_score)
             embed,_=view_all_embed(jobs,self.page,total)
-            await message.edit(embed=embed,view=ViewAllJobsView(jobs,self.page,pages))
-        @discord.ui.button(label='PREVIOUS',style=discord.ButtonStyle.secondary)
+            updated=ViewAllJobsView(jobs,self.page,pages,self.days,self.min_score)
+            edit_original=getattr(interaction,'edit_original_response',None)
+            if edit_original:
+                await edit_original(embed=embed,view=updated)
+            else:
+                await interaction.message.edit(embed=embed,view=updated)
+        async def change_page(self,interaction,delta):
+            await interaction.response.defer()
+            async with self._page_lock:
+                self.page=min(max(0,self.page+delta),max(0,self.total_pages-1))
+                try:
+                    await self.render(interaction)
+                except Exception as exc:
+                    log.warning('discord_view_all_page_failed',extra={'page':self.page,'error_type':type(exc).__name__})
+                    followup=getattr(interaction,'followup',None)
+                    if followup:
+                        await followup.send('I could not load that stored-jobs page. Please run `v!viewall` and try again.',ephemeral=True)
+        @discord.ui.button(label='PREVIOUS',style=discord.ButtonStyle.secondary,custom_id='jobhunter:view-all:previous')
         async def previous(self,interaction,button):
-            await interaction.response.defer()
-            self.page=max(0,self.page-1); await self.render(interaction.message)
-        @discord.ui.button(label='PAGE 1 / 1',style=discord.ButtonStyle.secondary,disabled=True)
+            await self.change_page(interaction,-1)
+        @discord.ui.button(label='PAGE 1 / 1',style=discord.ButtonStyle.secondary,disabled=True,custom_id='jobhunter:view-all:page')
         async def indicator(self,interaction,button): pass
-        @discord.ui.button(label='NEXT',style=discord.ButtonStyle.primary)
+        @discord.ui.button(label='NEXT',style=discord.ButtonStyle.primary,custom_id='jobhunter:view-all:next')
         async def next(self,interaction,button):
-            await interaction.response.defer()
-            self.page=min(self.total_pages-1,self.page+1); await self.render(interaction.message)
+            await self.change_page(interaction,1)
     async def send_view_all(destination, ephemeral=False, page=0, days=90, min_score=0):
         send_options={}
         if ephemeral:
@@ -505,7 +542,7 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             if safe_page != page:
                 jobs,total=await load_view_all_jobs(page=safe_page, days=days, min_score=min_score)
             embed,pages=view_all_embed(jobs,safe_page,total)
-            await loading.edit(embed=embed,view=ViewAllJobsView(jobs,safe_page,pages))
+            await loading.edit(embed=embed,view=ViewAllJobsView(jobs,safe_page,pages,days,min_score))
         except Exception as exc:
             log.warning('discord_view_all_failed',extra={'error_type':type(exc).__name__})
             await loading.edit(
@@ -772,7 +809,8 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
         if not channel: return
         def pending_ids():
             with repo.sessions() as s:
-                return s.scalars(select(Job.id).where(Job.notification_state.in_({'BOT_PENDING','FAILED'})).limit(3)).all()
+                now=datetime.now(timezone.utc)
+                return s.scalars(select(Job.id).where(Job.notification_state.in_({'BOT_PENDING','FAILED'}),Job.notification_attempts<max(1,cfg.notification_retry_max_attempts),(Job.notification_next_attempt_at.is_(None) | (Job.notification_next_attempt_at <= now))).order_by(Job.score.desc()).limit(max(1,min(10,cfg.notification_batch_size)))).all()
         ids=await asyncio.to_thread(pending_ids)
         delivered = False
         for job_id in ids:
@@ -800,17 +838,17 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
             except Exception as exc:
                 # Leave a failed claim retryable by the webhook fallback, but never
                 # create a second successful bot alert for the same job.
-                def mark_failed():
-                    with repo.sessions() as s:
-                        stored=s.get(Job,job_id)
-                        if stored and stored.notification_state=='BOT_SENDING': stored.notification_state='FAILED'; s.commit()
-                await asyncio.to_thread(mark_failed)
+                attempts=job.notification_attempts or 1
+                delay=min(3600,cfg.notification_retry_base_seconds*(2**max(0,attempts-1)))
+                next_attempt=None if attempts>=cfg.notification_retry_max_attempts else datetime.now(timezone.utc)+timedelta(seconds=delay)
+                await asyncio.to_thread(repo.record_notification_attempt,job_id,'FAILED',str(exc)[:500],next_attempt,False)
                 log.warning('discord_bot_alert_failed',extra={'job_id':job_id,'error':str(exc)})
         if delivered:
             await refresh_panel(bump=True)
     async def panel_watcher():
         last=None
         while not bot.is_closed():
+            await asyncio.to_thread(repo.recover_stuck_notifications)
             state=await asyncio.to_thread(scheduler_snapshot); marker=(state.get('phase'),state.get('last_poll_at'),state.get('next_poll_at'))
             if marker!=last: await refresh_panel(); last=marker
             await deliver_pending_alerts()

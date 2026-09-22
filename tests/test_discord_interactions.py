@@ -67,6 +67,10 @@ class FakeInteraction:
         self.payload = {}
         self.modal = None
 
+    async def edit_original_response(self, **kwargs):
+        await self.message.edit(**kwargs)
+        return self.message
+
 
 class FakeDiscordClient:
     instance = None
@@ -123,27 +127,26 @@ async def test_discord_controls_ack_during_slow_scan(monkeypatch, tmp_path):
     repo = Repository(f"sqlite:///{tmp_path / 'discord.db'}")
     repo.create_schema()
     with repo.sessions() as session:
-        session.add(
-            Job(
-                fingerprint="discord-fixture",
+        for index in range(6):
+            session.add(Job(
+                fingerprint=f"discord-fixture-{index}",
                 source="fixture",
-                source_job_id="fixture-1",
-                title="Junior DevOps Engineer",
+                source_job_id=f"fixture-{index}",
+                title=f"Junior DevOps Engineer {index}",
                 company="Cloud PH",
                 location="Manila, Philippines",
                 work_setup="Hybrid",
                 description="AWS Docker Terraform Linux",
-                url="https://example.com/job",
-                application_url="https://example.com/apply",
+                url=f"https://example.com/job/{index}",
+                application_url=f"https://example.com/apply/{index}",
                 score=90,
                 match_reasons=["AWS", "Docker"],
                 warnings=[],
                 raw_metadata={},
                 status="NEW",
                 notification_state="SENT",
-                    date_posted=datetime.now(timezone.utc),
-            )
-        )
+                date_posted=datetime.now(timezone.utc),
+            ))
         session.commit()
 
     scan_finished = asyncio.Event()
@@ -225,6 +228,18 @@ async def test_discord_controls_ack_during_slow_scan(monkeypatch, tmp_path):
         view_all_edit = view_all_interaction.followup.sent[0]["message"].edits[-1]
         assert view_all_edit["embed"].title == "𝐉𝐎𝐁 𝐁𝐎𝐀𝐑𝐃"
         view_all_view = view_all_edit["view"]
+        next_interaction = FakeInteraction(view_all_interaction.followup.sent[0]["message"])
+        next_task = await assert_acknowledged(
+            button(view_all_view, "NEXT").callback(next_interaction),
+            next_interaction,
+        )
+        await next_task
+        next_edit = next_interaction.message.edits[-1]
+        assert "Page 2 of 2" in next(field.value for field in next_edit["embed"].fields if "Page " in field.value)
+        assert "Junior DevOps Engineer" in next_edit["embed"].description
+        assert button(next_edit["view"], "NEXT").disabled
+        assert not button(next_edit["view"], "PREVIOUS").disabled
+
         view_all_apply = next(
             child for child in view_all_view.children
             if child.label.startswith("APPLY NOW")
