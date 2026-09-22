@@ -8,7 +8,7 @@ A Discord-first, 24/7 job discovery and notification service for Philippine entr
 - Dedicated production worker for polling, source discovery, cleanup, Discord delivery, and the Discord gateway.
 - PostgreSQL/Supabase in production; SQLite for local development and tests.
 - Public Greenhouse, Lever, Ashby, and SmartRecruiters adapters with pagination and normalized output.
-- Public Indeed Philippines and Google Jobs discovery through JobSpy. LinkedIn and JobStreet are never scraped through an unauthorized direct adapter.
+- Public Indeed Philippines and Google Jobs discovery through JobSpy. JobStreet links returned by Google Jobs are labeled `jobstreet:google-index`; the authenticated JobStreet session is never replayed for automated scraping.
 - Bounded automatic source discovery through public search, allowlisted HTTPS career-page seeds, and official ATS links found in job results.
 - Deterministic scoring. Gemini is optional and never required to ingest, score, store, or notify.
 - Durable worker/gateway leases, provider isolation, source health, scheduler heartbeats, structured JSON logs, and notification retry state.

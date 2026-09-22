@@ -113,6 +113,27 @@ async def test_google_uses_google_specific_query_and_never_invents_posted_date(t
 
 
 @pytest.mark.asyncio
+async def test_google_jobstreet_result_is_labeled_without_direct_scraping(tmp_path):
+    row = sample_row(
+        id="google-jobstreet-1",
+        site="google",
+        job_url="https://www.google.com/search?q=job",
+        job_url_direct="https://ph.jobstreet.com/job/94764515",
+    )
+    source = JobSpySource(
+        "google",
+        cfg(tmp_path),
+        plans=[JobSpyPlan("Junior Software Engineer", "Philippines")],
+        scraper=lambda **_kwargs: Rows([row]),
+    )
+
+    jobs = await source.fetch()
+
+    assert jobs[0].source == "jobstreet:google-index"
+    assert jobs[0].url == "https://ph.jobstreet.com/job/94764515"
+
+
+@pytest.mark.asyncio
 async def test_google_empty_response_is_degraded_not_falsely_ready(tmp_path):
     source = JobSpySource(
         "google", cfg(tmp_path), plans=[JobSpyPlan("Software Engineer", "Philippines")],

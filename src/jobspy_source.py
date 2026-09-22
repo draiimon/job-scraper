@@ -308,8 +308,14 @@ class JobSpySource(Source):
             "canonical_url": canonical_url,
             "remote_ph_evidence": remote_ph_evidence,
         }
+        canonical_host = (urlsplit(canonical_url).hostname or "").lower()
+        normalized_source = (
+            "jobstreet:google-index"
+            if self.provider == "google" and canonical_host.endswith("jobstreet.com")
+            else self.name
+        )
         return NormalizedJob(
-            source=self.name,
+            source=normalized_source,
             source_job_id=source_job_id,
             title=title,
             company=company,

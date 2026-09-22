@@ -622,17 +622,15 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
 
     def jobstreet_status_embed(user_id):
         from .jobstreet_link import connection_status
-        from .jobstreet import JOBSTREET_SOURCE_NAME
         status=connection_status(cfg,repo,user_id)
         with repo.sessions() as session:
-            from .models import SourceConnection, SourceHealth
+            from .models import SourceConnection
             from sqlalchemy import select
             record=session.scalar(select(SourceConnection).where(
                 SourceConnection.source=='jobstreet',
                 SourceConnection.discord_user_id==str(user_id),
             ))
-            source_health=session.get(SourceHealth, JOBSTREET_SOURCE_NAME)
-        embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓',f'Authenticated source status: **{status}**')
+        embed=styled_embed('𝐉𝐎𝐁𝐒𝐓𝐑𝐄𝐄𝐓',f'Account connection: **{status}**')
         if record and record.last_verified_at:
             verified=record.last_verified_at.strftime('%Y-%m-%d %H:%M UTC')
             embed.add_field(name='𝐋𝐀𝐒𝐓 𝐕𝐄𝐑𝐈𝐅𝐈𝐄𝐃',value=verified,inline=False)
@@ -644,17 +642,14 @@ async def run_discord_bot(cfg, repo, manual_search, scheduler_snapshot, manual_s
                   'Only the encrypted browser session is retained.',
             inline=False,
         )
-        if source_health:
-            last_scan = source_health.last_success_at.strftime('%Y-%m-%d %H:%M UTC') if source_health.last_success_at else 'Not scanned yet'
-            captured = int(source_health.last_job_count or 0)
-            discovery = (
-                f'Last scan: {last_scan}\n'
-                f'Listings captured: {captured}\n'
-                f'Source health: {source_health.status.upper()}'
-            )
-            if captured == 0:
-                discovery += '\n\nLogin connects your account; it does not import jobs by itself. The next scan will only save active listings it can capture.'
-            embed.add_field(name='𝐃𝐈𝐒𝐂𝐎𝐕𝐄𝐑𝐘', value=discovery, inline=False)
+        embed.add_field(
+            name='𝐃𝐈𝐒𝐂𝐎𝐕𝐄𝐑𝐘',
+            value=(
+                'JobStreet links are discovered through Google Jobs or an explicitly configured licensed provider. '
+                'The account login is for your manual use only and is never replayed for automated scraping.'
+            ),
+            inline=False,
+        )
         return embed
 
     async def send_jobstreet_link(interaction, user_id):

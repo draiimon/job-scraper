@@ -21,7 +21,7 @@ from src.jobstreet import (
 def test_jobstreet_session_defaults_to_private_and_auth_required(tmp_path):
     cfg = Settings(jobstreet_session_path=str(tmp_path / "private" / "jobstreet_session.json"))
     assert not has_storage_state(cfg)
-    assert jobstreet_status(cfg) == "AUTH REQUIRED"
+    assert jobstreet_status(cfg) == "INDEXED VIA GOOGLE"
     assert jobstreet_sources(cfg) == []
 
 
@@ -30,8 +30,8 @@ def test_jobstreet_storage_state_is_accepted_without_exposing_contents(tmp_path)
     path.write_text('{"cookies": [], "origins": []}', encoding="utf-8")
     cfg = Settings(jobstreet_session_path=str(path))
     assert has_storage_state(cfg)
-    assert jobstreet_status(cfg) == "READY"
-    assert len(jobstreet_sources(cfg)) == 1
+    assert jobstreet_status(cfg) == "INDEXED VIA GOOGLE"
+    assert jobstreet_sources(cfg) == []
 
 def test_render_secret_restores_private_jobstreet_session(tmp_path):
     import base64

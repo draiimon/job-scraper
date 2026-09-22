@@ -104,7 +104,15 @@ def _auth_state(cfg: Settings, repo=None) -> str:
 
 
 def jobstreet_status(cfg: Settings, repo=None) -> str:
-    return _auth_state(cfg, repo)
+    # JobStreet's current terms prohibit automated search/screen scraping.
+    # Discovery is therefore performed by the permitted Google Jobs index (or
+    # an explicitly configured licensed data provider), never by replaying the
+    # user's authenticated browser session.
+    if brightdata_jobstreet_status(cfg) == "READY":
+        return "LICENSED SOURCE READY"
+    if cfg.jobspy_enabled and cfg.jobspy_google_enabled:
+        return "INDEXED VIA GOOGLE"
+    return "MANUAL ONLY" if _auth_state(cfg, repo) == "READY" else "DISABLED"
 
 
 def brightdata_jobstreet_status(cfg: Settings) -> str:
@@ -446,16 +454,10 @@ class JobStreetBrowserSource(Source):
 
 
 def jobstreet_sources(cfg: Settings, repo=None) -> list[Source]:
-    if not getattr(cfg, 'jobstreet_enabled', True):
-        return []
-    if repo is not None and connection_status(cfg, repo) == "READY":
-        return [JobStreetBrowserSource(cfg, repo)]
-    # Once the managed flow has been used, do not silently fall back to an
-    # older local/Render session after the user disconnects or needs reauth.
-    # The base64 state remains supported for deployments that have never used
-    # the managed flow.
-    if repo is not None and has_managed_connection(repo):
-        return []
-    if not ensure_storage_state(cfg):
-        return []
-    return [JobStreetBrowserSource(cfg, repo)]
+    """Do not schedule automated JobStreet browser extraction.
+
+    The encrypted session is retained solely for user-controlled/manual use.
+    JobStreet links may still enter the canonical pipeline through Google Jobs
+    or a separately configured licensed provider.
+    """
+    return []
